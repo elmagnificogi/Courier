@@ -281,10 +281,10 @@ export async function runPreflightCheck(): Promise<PreflightReport> {
     versionOk = Boolean(version?.webSocketDebuggerUrl);
     userAgent = version?.["User-Agent"] ?? null;
     if (!versionOk) {
-      warnings.push("Version endpoint reachable but webSocketDebuggerUrl missing.");
+      warnings.push("版本接口可达，但缺少 webSocketDebuggerUrl。");
     }
   } catch {
-    warnings.push(`Cannot reach CDP version endpoint at ${cdpUrl}/json/version. Is the IDE running with --remote-debugging-port?`);
+    warnings.push(`无法访问 CDP 版本接口 ${cdpUrl}/json/version。IDE 是否已用 --remote-debugging-port 启动？`);
     return {
       ide,
       cdpUrl,
@@ -297,7 +297,7 @@ export async function runPreflightCheck(): Promise<PreflightReport> {
       discovery: { chatInputCandidates: [], responseCandidates: [], modeIndicatorCandidates: [] },
       warnings,
       suggestions: [
-        `Launch ${ide === "windsurf" ? "Windsurf" : ide === "vscode" ? "VS Code" : "Cursor"} with: --remote-debugging-port=${ide === "windsurf" ? "9223" : ide === "vscode" ? "9224" : "9222"}`
+        `请用带远程调试的方式启动 ${ide === "windsurf" ? "Windsurf" : ide === "vscode" ? "VS Code" : "Cursor"}：--remote-debugging-port=${ide === "windsurf" ? "9223" : ide === "vscode" ? "9224" : "9222"}`
       ]
     };
   }
@@ -308,10 +308,10 @@ export async function runPreflightCheck(): Promise<PreflightReport> {
     pageTargetCount = targets.filter(t => t.type === "page").length;
     reachable = targets.length > 0;
     if (pageTargetCount === 0) {
-      warnings.push("No page targets found. The IDE may not have a visible window open.");
+      warnings.push("没有找到页面目标。IDE 可能还没有可见窗口。");
     }
   } catch {
-    warnings.push("CDP target list failed.");
+    warnings.push("获取 CDP 目标列表失败。");
   }
 
   if (!reachable) {
@@ -353,17 +353,17 @@ export async function runPreflightCheck(): Promise<PreflightReport> {
       modeIndicatorCandidates = await discoverModeIndicatorCandidates(cdp, client);
     });
   } catch {
-    warnings.push("Selector probing failed during CDP evaluation.");
+    warnings.push("探测选择器时 CDP 执行失败。");
   }
 
   // --- Analyze results and generate warnings/suggestions ---
   if (chatInputProbe.matches === 0 || !chatInputProbe.hasVisible) {
-    warnings.push(`Chat input selector "${selectors.chatInput}" matched ${chatInputProbe.matches} elements (${chatInputProbe.hasVisible ? "visible" : "none visible"}).`);
+    warnings.push(`聊天输入选择器 "${selectors.chatInput}" 匹配到 ${chatInputProbe.matches} 个元素（${chatInputProbe.hasVisible ? "可见" : "均不可见"}）。`);
     const best = chatInputCandidates.find(c => c.visible && c.score > 0);
     if (best) {
-      suggestions.push(`Suggested chat input selector: ${best.selector} (class="${best.className.substring(0, 80)}")`);
+      suggestions.push(`建议的聊天输入选择器：${best.selector}（class="${best.className.substring(0, 80)}"）`);
     } else {
-      suggestions.push("No visible chat input candidates found. Ensure the Cascade/Composer panel is open.");
+      suggestions.push("没有发现可见的聊天输入框。请确认 Cascade/Composer 面板已打开。");
     }
   }
 
@@ -371,18 +371,18 @@ export async function runPreflightCheck(): Promise<PreflightReport> {
     // Response selector having 0 matches is only a warning if there are no messages yet
     const hasAnyResponses = responseCandidates.some(c => c.visible);
     if (hasAnyResponses) {
-      warnings.push(`Response selector "${selectors.response}" matched 0 elements but DOM has response-like nodes.`);
+      warnings.push(`回复选择器 "${selectors.response}" 匹配到 0 个元素，但 DOM 里有类似回复的节点。`);
       const best = responseCandidates.find(c => c.visible && c.score > 50);
       if (best) {
-        suggestions.push(`Suggested response selector: ${best.selector} (class="${best.className.substring(0, 80)}")`);
+        suggestions.push(`建议的回复选择器：${best.selector}（class="${best.className.substring(0, 80)}"）`);
       }
     }
   } else if (responseProbe.matches === -1) {
-    warnings.push(`Response selector "${selectors.response}" is invalid CSS.`);
+    warnings.push(`回复选择器 "${selectors.response}" 不是合法 CSS。`);
   }
 
   if (modeIndicatorCandidates.length === 0) {
-    warnings.push("No mode indicator elements found. Mode switching may not work.");
+    warnings.push("没有找到模式指示元素，模式切换可能不可用。");
   }
 
   return {
@@ -407,59 +407,59 @@ export function formatPreflightReport(report: PreflightReport): string {
   const ideName = report.ide === "windsurf" ? "Windsurf" : report.ide === "vscode" ? "VS Code" : "Cursor";
   const lines: string[] = [];
 
-  lines.push(`=== CDP Preflight Check: ${ideName} ===`);
-  lines.push(`CDP URL: ${report.cdpUrl}`);
+  lines.push(`=== CDP 预检：${ideName} ===`);
+  lines.push(`CDP 地址：${report.cdpUrl}`);
   lines.push("");
 
   // Connectivity
-  lines.push("--- Connectivity ---");
-  lines.push(`  Reachable:     ${report.connectivity.reachable ? "YES" : "NO"}`);
-  lines.push(`  Version OK:    ${report.connectivity.versionOk ? "YES" : "NO"}`);
-  lines.push(`  User-Agent:    ${report.connectivity.userAgent ?? "(unknown)"}`);
-  lines.push(`  Targets:       ${report.connectivity.targetCount} total, ${report.connectivity.pageTargetCount} page`);
+  lines.push("--- 连通性 ---");
+  lines.push(`  可达：         ${report.connectivity.reachable ? "是" : "否"}`);
+  lines.push(`  版本接口：     ${report.connectivity.versionOk ? "正常" : "异常"}`);
+  lines.push(`  User-Agent：   ${report.connectivity.userAgent ?? "（未知）"}`);
+  lines.push(`  目标：         共 ${report.connectivity.targetCount} 个，页面 ${report.connectivity.pageTargetCount} 个`);
   lines.push("");
 
   // Selector health
-  lines.push("--- Configured Selectors ---");
+  lines.push("--- 已配置选择器 ---");
   const fmtProbe = (label: string, p: SelectorProbeResult) => {
-    const status = p.matches > 0 && p.hasVisible ? "OK" : p.matches > 0 ? "HIDDEN" : p.matches === -1 ? "INVALID" : "BROKEN";
-    return `  ${label}: ${status} (${p.matches} matches, visible=${p.hasVisible}) → ${p.selector}`;
+    const status = p.matches > 0 && p.hasVisible ? "正常" : p.matches > 0 ? "隐藏" : p.matches === -1 ? "非法" : "失效";
+    return `  ${label}: ${status}（${p.matches} 处匹配，可见=${p.hasVisible}）→ ${p.selector}`;
   };
-  lines.push(fmtProbe("Chat Input", report.selectors.chatInput));
-  lines.push(fmtProbe("Response  ", report.selectors.response));
+  lines.push(fmtProbe("聊天输入", report.selectors.chatInput));
+  lines.push(fmtProbe("回复区域", report.selectors.response));
   if (report.selectors.modeIndicator.selector) {
-    lines.push(fmtProbe("Mode      ", report.selectors.modeIndicator));
+    lines.push(fmtProbe("模式指示", report.selectors.modeIndicator));
   }
   lines.push("");
 
   // Discovery
   if (report.discovery.chatInputCandidates.length > 0) {
-    lines.push("--- Discovered Chat Input Candidates ---");
+    lines.push("--- 发现的聊天输入候选 ---");
     for (const c of report.discovery.chatInputCandidates.slice(0, 5)) {
-      lines.push(`  [${c.visible ? "VIS" : "HID"}] score=${c.score} ${c.selector} class="${c.className.substring(0, 60)}"`);
+      lines.push(`  [${c.visible ? "可见" : "隐藏"}] score=${c.score} ${c.selector} class="${c.className.substring(0, 60)}"`);
     }
     lines.push("");
   }
 
   if (report.discovery.responseCandidates.length > 0) {
-    lines.push("--- Discovered Response Candidates ---");
+    lines.push("--- 发现的回复区域候选 ---");
     for (const c of report.discovery.responseCandidates.slice(0, 5)) {
-      lines.push(`  [${c.visible ? "VIS" : "HID"}] score=${c.score} ${c.selector} class="${c.className.substring(0, 60)}"`);
+      lines.push(`  [${c.visible ? "可见" : "隐藏"}] score=${c.score} ${c.selector} class="${c.className.substring(0, 60)}"`);
     }
     lines.push("");
   }
 
   if (report.discovery.modeIndicatorCandidates.length > 0) {
-    lines.push("--- Discovered Mode Indicator Candidates ---");
+    lines.push("--- 发现的模式指示候选 ---");
     for (const c of report.discovery.modeIndicatorCandidates.slice(0, 5)) {
-      lines.push(`  [${c.visible ? "VIS" : "HID"}] score=${c.score} ${c.selector} class="${c.className.substring(0, 60)}"`);
+      lines.push(`  [${c.visible ? "可见" : "隐藏"}] score=${c.score} ${c.selector} class="${c.className.substring(0, 60)}"`);
     }
     lines.push("");
   }
 
   // Warnings
   if (report.warnings.length > 0) {
-    lines.push("--- Warnings ---");
+    lines.push("--- 警告 ---");
     for (const w of report.warnings) {
       lines.push(`  ⚠ ${w}`);
     }
@@ -468,7 +468,7 @@ export function formatPreflightReport(report: PreflightReport): string {
 
   // Suggestions
   if (report.suggestions.length > 0) {
-    lines.push("--- Suggestions ---");
+    lines.push("--- 建议 ---");
     for (const s of report.suggestions) {
       lines.push(`  → ${s}`);
     }
@@ -476,7 +476,7 @@ export function formatPreflightReport(report: PreflightReport): string {
   }
 
   if (report.warnings.length === 0 && report.connectivity.reachable) {
-    lines.push("All checks passed. Bridge is ready to use.");
+    lines.push("全部检查通过，桥接可以正常使用。");
   }
 
   return lines.join("\n");
@@ -508,28 +508,28 @@ function buildPreflightAlert(report: PreflightReport): string | null {
 
   // --- CDP unreachable ---
   if (!report.connectivity.reachable) {
-    lines.push(`\u26a0\ufe0f Bridge Alert (${ideName}): CDP unreachable at ${report.cdpUrl}`);
-    lines.push(`Likely Cause: ${ideName} is not running, or was launched without --remote-debugging-port.`);
-    lines.push(`Quick Fix: Restart ${ideName} with: --remote-debugging-port=${debugPort}`);
+    lines.push(`⚠️ 桥接告警（${ideName}）：无法连接 CDP ${report.cdpUrl}`);
+    lines.push(`可能原因：${ideName} 未运行，或启动时没有加 --remote-debugging-port。`);
+    lines.push(`处理办法：用带远程调试的方式重新打开 ${ideName}：--remote-debugging-port=${debugPort}`);
     if (report.ide === "cursor") {
-      lines.push(`  Check for port conflicts if Windsurf is also running on the same port.`);
+      lines.push(`  若 Windsurf 占用了同一端口也会冲突。`);
     }
     return lines.join("\n");
   }
 
   // --- Version endpoint issues ---
   if (!report.connectivity.versionOk) {
-    lines.push(`\u26a0\ufe0f Bridge Alert (${ideName}${versionTag}): CDP version endpoint returned unexpected data.`);
-    lines.push(`Likely Cause: ${ideName} update changed the debug protocol surface, or a proxy is interfering.`);
-    lines.push(`Quick Fix: Verify ${report.cdpUrl}/json/version returns valid JSON with webSocketDebuggerUrl.`);
+    lines.push(`⚠️ 桥接告警（${ideName}${versionTag}）：CDP 版本接口返回了异常数据。`);
+    lines.push(`可能原因：${ideName} 更新改了调试协议，或中间有代理干扰。`);
+    lines.push(`处理办法：确认 ${report.cdpUrl}/json/version 能返回带 webSocketDebuggerUrl 的 JSON。`);
   }
 
   // --- No page targets ---
   if (report.connectivity.reachable && report.connectivity.pageTargetCount === 0) {
-    lines.push(`\u26a0\ufe0f Bridge Alert (${ideName}${versionTag}): No page targets found.`);
-    lines.push(`Likely Cause: ${ideName} window is not fully loaded or no workspace/folder is open.`);
+    lines.push(`⚠️ 桥接告警（${ideName}${versionTag}）：没有找到页面目标。`);
+    lines.push(`可能原因：${ideName} 窗口还没加载完，或没有打开工作区/文件夹。`);
     const panelName = report.ide === "windsurf" ? "Cascade" : report.ide === "vscode" ? "Chat" : "Composer";
-    lines.push(`Quick Fix: Open a folder in ${ideName} and ensure the ${panelName} panel is visible.`);
+    lines.push(`处理办法：在 ${ideName} 里打开一个文件夹，并确保 ${panelName} 面板可见。`);
   }
 
   const suppressSelectorAlerts = report.ide === "cursor";
@@ -538,62 +538,62 @@ function buildPreflightAlert(report: PreflightReport): string | null {
   const ci = report.selectors.chatInput;
   if (!suppressSelectorAlerts && report.connectivity.reachable && report.connectivity.pageTargetCount > 0) {
     if (ci.matches === 0 || !ci.hasVisible) {
-      const statusWord = ci.matches === 0 ? "no matches" : `${ci.matches} match(es) but none visible`;
-      lines.push(`\u26a0\ufe0f Bridge Alert (${ideName}${versionTag}): Selector CHAT_INPUT failed (${statusWord}).`);
+      const statusWord = ci.matches === 0 ? "无匹配" : `${ci.matches} 处匹配但都不可见`;
+      lines.push(`⚠️ 桥接告警（${ideName}${versionTag}）：CHAT_INPUT 选择器失败（${statusWord}）。`);
       const panelName = report.ide === "windsurf" ? "Cascade" : report.ide === "vscode" ? "Chat" : "Composer";
-      lines.push(`Likely Cause: ${ideName}${versionTag} update changed the ${panelName} layout.`);
+      lines.push(`可能原因：${ideName}${versionTag} 更新改了 ${panelName} 布局。`);
       const bestInput = report.discovery.chatInputCandidates.find(c => c.visible && c.score > 0);
       if (bestInput) {
-        lines.push(`Auto-Discovered: "${bestInput.selector}" (class="${bestInput.className.substring(0, 60)}", score=${bestInput.score})`);
+        lines.push(`自动发现："${bestInput.selector}"（class="${bestInput.className.substring(0, 60)}"，score=${bestInput.score}）`);
         const envVar =
           report.ide === "windsurf"
             ? "WINDSURF_CHAT_INPUT_SELECTOR"
             : report.ide === "vscode"
               ? "VSCODE_CHAT_INPUT_SELECTOR"
               : "CURSOR_CHAT_INPUT_SELECTOR";
-        lines.push(`Quick Fix: Update ${envVar} in .env, or run /diag to see all candidates.`);
+        lines.push(`处理办法：在 .env 更新 ${envVar}，或发送 /diag 查看全部候选。`);
       } else if (ci.matches === 0) {
-        const panelName = report.ide === "windsurf" ? "Cascade" : report.ide === "vscode" ? "Chat" : "Composer";
-        lines.push(`Quick Fix: Open the ${panelName} panel, then run /diag to discover new selectors.`);
+        const panelNameInner = report.ide === "windsurf" ? "Cascade" : report.ide === "vscode" ? "Chat" : "Composer";
+        lines.push(`处理办法：打开 ${panelNameInner} 面板，然后发送 /diag 发现新选择器。`);
       } else {
-        lines.push(`Quick Fix: The panel may be scrolled or collapsed. Focus it and run /diag.`);
+        lines.push(`处理办法：面板可能被收起或滚走了。点一下它再发送 /diag。`);
       }
     } else if (ci.matches === -1) {
-      lines.push(`\u26a0\ufe0f Bridge Alert (${ideName}${versionTag}): CHAT_INPUT selector is invalid CSS.`);
-      lines.push(`Quick Fix: Check .env for syntax errors in the selector value, then run /diag.`);
+      lines.push(`⚠️ 桥接告警（${ideName}${versionTag}）：CHAT_INPUT 选择器不是合法 CSS。`);
+      lines.push(`处理办法：检查 .env 里的选择器语法，然后发送 /diag。`);
     }
   }
 
   // --- Response selector broken ---
   const rs = report.selectors.response;
   if (!suppressSelectorAlerts && report.connectivity.reachable && report.connectivity.pageTargetCount > 0 && rs.matches === -1) {
-    lines.push(`\u26a0\ufe0f Bridge Alert (${ideName}${versionTag}): RESPONSE selector is invalid CSS.`);
-    lines.push(`Quick Fix: Check .env for syntax errors in the response selector value.`);
+    lines.push(`⚠️ 桥接告警（${ideName}${versionTag}）：RESPONSE 选择器不是合法 CSS。`);
+    lines.push(`处理办法：检查 .env 里回复选择器的语法。`);
   } else if (!suppressSelectorAlerts && report.connectivity.reachable && report.connectivity.pageTargetCount > 0 && rs.matches === 0) {
     const hasResponseNodes = report.discovery.responseCandidates.some(c => c.visible);
     if (hasResponseNodes) {
-      lines.push(`\u26a0\ufe0f Bridge Alert (${ideName}${versionTag}): RESPONSE selector matched 0 elements but response-like DOM nodes exist.`);
-      lines.push(`Likely Cause: ${ideName}${versionTag} update changed message rendering classes.`);
+      lines.push(`⚠️ 桥接告警（${ideName}${versionTag}）：RESPONSE 选择器匹配到 0 个元素，但 DOM 里有类似回复的节点。`);
+      lines.push(`可能原因：${ideName}${versionTag} 更新改了消息渲染的 class。`);
       const bestResp = report.discovery.responseCandidates.find(c => c.visible && c.score > 50);
       if (bestResp) {
-        lines.push(`Auto-Discovered: "${bestResp.selector}" (class="${bestResp.className.substring(0, 60)}", score=${bestResp.score})`);
+        lines.push(`自动发现："${bestResp.selector}"（class="${bestResp.className.substring(0, 60)}"，score=${bestResp.score}）`);
         const envVar =
           report.ide === "windsurf"
             ? "WINDSURF_RESPONSE_SELECTOR"
             : report.ide === "vscode"
               ? "VSCODE_RESPONSE_SELECTOR"
               : "CURSOR_RESPONSE_SELECTOR";
-        lines.push(`Quick Fix: Update ${envVar} in .env, or run /diag to see all candidates.`);
+        lines.push(`处理办法：在 .env 更新 ${envVar}，或发送 /diag 查看全部候选。`);
       }
     }
   }
 
   // --- Mode indicator missing ---
   if (!suppressSelectorAlerts && report.connectivity.reachable && report.connectivity.pageTargetCount > 0 && report.discovery.modeIndicatorCandidates.length === 0) {
-    lines.push(`\u26a0\ufe0f Bridge Alert (${ideName}${versionTag}): No mode indicator elements found.`);
-    lines.push(`Likely Cause: ${ideName}${versionTag} update changed the mode switcher UI, or the panel is collapsed.`);
+    lines.push(`⚠️ 桥接告警（${ideName}${versionTag}）：没有找到模式指示元素。`);
+    lines.push(`可能原因：${ideName}${versionTag} 更新改了模式切换 UI，或面板被收起。`);
     const panelName = report.ide === "windsurf" ? "Cascade" : report.ide === "vscode" ? "Chat" : "Composer";
-    lines.push(`Quick Fix: Open the ${panelName} panel fully. Mode switching (/mode) may not work until fixed.`);
+    lines.push(`处理办法：把 ${panelName} 面板完全打开。在修好之前 /mode 可能不可用。`);
   }
 
   if (lines.length === 0) {
@@ -602,7 +602,7 @@ function buildPreflightAlert(report: PreflightReport): string | null {
 
   // Append a footer with the run-/diag reminder
   lines.push("");
-  lines.push(`Run /diag anytime for a full diagnostic with auto-discovered selector candidates.`);
+  lines.push(`随时发送 /diag 可查看完整诊断和自动发现的选择器候选。`);
 
   return lines.join("\n");
 }
@@ -666,7 +666,7 @@ export async function runStartupPreflightCheck(
     logger.warn({ error }, "CDP preflight check failed unexpectedly — bridge will attempt to run anyway");
     if (notifyUsers) {
       try {
-        await notifyUsers("CDP preflight check failed unexpectedly. Check bridge logs for details.");
+        await notifyUsers("CDP 预检意外失败，请查看 Gantry 日志。");
       } catch { /* best-effort */ }
     }
     return false;

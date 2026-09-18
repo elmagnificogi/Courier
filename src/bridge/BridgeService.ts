@@ -117,7 +117,7 @@ export class BridgeService {
 
   async getModel(): Promise<string> {
     if (config.bridgeBackendMode === "api") {
-      return "Model detection is unavailable in API backend mode.";
+      return "API 后端模式下无法探测模型。";
     }
     const result = await this.ideClient.getModel();
     return result.text;
@@ -125,7 +125,7 @@ export class BridgeService {
 
   async setModel(modelName: string): Promise<string> {
     if (config.bridgeBackendMode === "api") {
-      return "Model switching is unavailable in API backend mode.";
+      return "API 后端模式下无法切换模型。";
     }
     const result = await this.ideClient.setModel(modelName);
     return result.text;
@@ -133,7 +133,7 @@ export class BridgeService {
 
   async listModels(): Promise<string> {
     if (config.bridgeBackendMode === "api") {
-      return "Model listing is unavailable in API backend mode.";
+      return "API 后端模式下无法列出模型。";
     }
     if (config.bridgeIdeTarget === "windsurf" && this.ideClient instanceof WindsurfAutomationClient) {
       const result = await this.ideClient.listModels();
@@ -143,15 +143,15 @@ export class BridgeService {
       const result = await this.ideClient.listModels();
       return result.text;
     }
-    return "Model listing is currently available for Windsurf and VS Code.";
+    return "目前只有 Windsurf 和 VS Code 支持列出模型。";
   }
 
   async contextStatus(): Promise<string> {
     const context = await this.contextExtractor.readContextPercentage();
 
-    const percentText = context.percent === null ? "unavailable" : `${context.percent}%`;
+    const percentText = context.percent === null ? "不可用" : `${context.percent}%`;
     return [
-      "Context status",
+      "Context 状态",
       `• Context ${percentText}`
     ].join("\n");
   }
@@ -160,42 +160,42 @@ export class BridgeService {
     const context = await this.contextExtractor.readContextPercentage();
 
     const lines = [
-      "Usage status",
-      `• Context ${context.percent === null ? "unavailable" : `${context.percent}%`}`,
-      `• Token usage: no stable public API; reporting best-effort UI-derived context only.`
+      "用量状态",
+      `• Context ${context.percent === null ? "不可用" : `${context.percent}%`}`,
+      `• Token 用量：没有稳定的公开接口，目前只能按界面上的 Context 做 best-effort 估算。`
     ];
     return lines.join("\n");
   }
 
   async listChats(): Promise<string> {
     if (config.bridgeBackendMode === "api") {
-      return "Target listing is unavailable in API backend mode.";
+      return "API 后端模式下无法列出目标。";
     }
     const ideName = config.bridgeIdeTarget === "windsurf" ? "Windsurf" : config.bridgeIdeTarget === "vscode" ? "VS Code" : "Cursor";
     const targets = await this.ideClient.listChatTargets();
     const selection = await this.ideClient.targetSelectionStatus();
     if (targets.length === 0) {
-      return `No ${ideName} CDP targets found.`;
+      return `没有找到 ${ideName} 的 CDP 目标。`;
     }
 
     const lines = targets
       .filter((target) => target.type === "page")
       .slice(0, 10)
       .map((target, index) => {
-        const pinned = selection.mode === "manual" && selection.manualTargetId === target.id ? " [PINNED]" : "";
-        return `${index + 1}. ${target.title || "(untitled)"}${pinned} | ${target.url || "(no-url)"}`;
+        const pinned = selection.mode === "manual" && selection.manualTargetId === target.id ? " [已固定]" : "";
+        return `${index + 1}. ${target.title || "（无标题）"}${pinned} | ${target.url || "（无 URL）"}`;
       });
 
     const header =
       selection.mode === "manual"
-        ? `${ideName} targets (selection: manual -> ${selection.manualTargetTitle ?? "unknown"})`
-        : `${ideName} targets (selection: auto)`;
+        ? `${ideName} 目标（选择：手动 → ${selection.manualTargetTitle ?? "未知"}）`
+        : `${ideName} 目标（选择：自动）`;
     return `${header}\n${lines.join("\n")}`;
   }
 
   async selectTarget(selection: "auto" | number): Promise<string> {
     if (config.bridgeBackendMode === "api") {
-      return "Target selection is unavailable in API backend mode.";
+      return "API 后端模式下无法选择目标。";
     }
     const result = await this.ideClient.selectTarget(selection);
     return result.text;
@@ -203,13 +203,13 @@ export class BridgeService {
 
   async targetStatus(): Promise<string> {
     if (config.bridgeBackendMode === "api") {
-      return "Target selection is unavailable in API backend mode.";
+      return "API 后端模式下无法选择目标。";
     }
     const selection = await this.ideClient.targetSelectionStatus();
     if (selection.mode === "auto") {
-      return "Target selection is auto.";
+      return "目标选择：自动。";
     }
-    return `Target selection is manual: ${selection.manualTargetTitle ?? "(unknown title)"} (${selection.manualTargetId ?? "unknown id"}).`;
+    return `目标选择：手动 ${selection.manualTargetTitle ?? "（未知标题）"}（${selection.manualTargetId ?? "未知 id"}）。`;
   }
 
   async diagnostics(): Promise<string> {
@@ -236,7 +236,7 @@ export class BridgeService {
         : {}) || {};
 
     const lines = [
-      `Bridge diagnostics (${ideName})`,
+      `桥接诊断（${ideName}）`,
       `- ideTarget: ${config.bridgeIdeTarget}`,
       `- cdpReachable: ${diag.cdpReachable}`,
       `- versionEndpointReachable: ${diag.versionEndpointReachable}`,
@@ -256,7 +256,7 @@ export class BridgeService {
     if (config.bridgeIdeTarget === "cursor") {
       const context = await this.contextExtractor.readContextPercentage();
       const sqlite = await this.sqliteDiagnostics.probe();
-      const percentText = context.percent === null ? "unavailable" : `${context.percent}%`;
+      const percentText = context.percent === null ? "不可用" : `${context.percent}%`;
       const contextLine = `- context: **${percentText}** (source=${context.source}, confidence=${context.confidence})`;
 
       lines.push(contextLine, `- sqlite: ${sqlite}`);
@@ -270,7 +270,7 @@ export class BridgeService {
     options?: { autoSubmit?: boolean; fileName?: string; mimeType?: string; prompt?: string }
   ): Promise<string> {
     if (config.bridgeBackendMode === "api") {
-      return "Image injection is unavailable in API backend mode.";
+      return "API 后端模式下无法注入图片。";
     }
     const result = await this.imageInjector.injectPhotoFromTelegramFile(filePath, options);
     return result.text;
@@ -281,7 +281,7 @@ export class BridgeService {
     options?: { autoSubmit?: boolean; fileName?: string; mimeType?: string; prompt?: string }
   ): Promise<string> {
     if (config.bridgeBackendMode === "api") {
-      return "Document injection is unavailable in API backend mode.";
+      return "API 后端模式下无法注入文件。";
     }
     const result = await this.imageInjector.injectDocumentFromTelegramFile(filePath, options);
     return result.text;

@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 const schema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
-  TELEGRAM_BOT_TOKEN: z.string().min(1, "TELEGRAM_BOT_TOKEN is required"),
+  TELEGRAM_BOT_TOKEN: z.string().default(""),
   TELEGRAM_ALLOWED_USER_IDS: z.string().default(""),
   BRIDGE_BACKEND_MODE: z.enum(["cdp", "api"]).default("cdp"),
   BRIDGE_IDE_TARGET: z.enum(["cursor", "windsurf", "vscode"]).default("cursor"),
@@ -18,7 +18,7 @@ const schema = z.object({
     .default('.tiptap.ProseMirror[contenteditable="true"], [class*="ai-input"] textarea, [class*="composer"] textarea, [class*="composer"] [role="textbox"]'),
   CURSOR_RESPONSE_SELECTOR: z
     .string()
-    .default('.composer-rendered-message .anysphere-markdown-container-root, [class*="assistant-message"] [class*="markdown"], [class*="assistant"] [class*="markdown"]'),
+    .default('[data-message-kind="assistant"], [data-message-role="ai"], [data-react-transcript-row-kind="assistantMarkdown"], .agent-transcript-row-markdown, .composer-rendered-message[data-message-kind="assistant"] .anysphere-markdown-container-root'),
   CURSOR_CONTEXT_SELECTOR: z.string().default(""),
   CURSOR_MODEL_SELECTOR: z.string().default('[class*="composer-unified-dropdown-model"]'),
   CURSOR_CONTEXT_REGION: z.string().default(""),
@@ -72,6 +72,28 @@ const schema = z.object({
   FEISHU_VERIFICATION_TOKEN: z.string().default(""),
   FEISHU_ENCRYPT_KEY: z.string().default(""),
   FEISHU_ALLOWED_OPEN_IDS: z.string().default(""),
+  WECOM_ENABLED: z.string().default("false"),
+  WECOM_CORP_ID: z.string().default(""),
+  WECOM_AGENT_ID: z.coerce.number().default(0),
+  WECOM_SECRET: z.string().default(""),
+  WECOM_TOKEN: z.string().default(""),
+  WECOM_AES_KEY: z.string().default(""),
+  WECOM_ALLOWED_USER_IDS: z.string().default(""),
+  WECOM_API_BASE: z.string().default("https://qyapi.weixin.qq.com"),
+  WECHAT_ENABLED: z.string().default("false"),
+  WECHAT_APP_ID: z.string().default(""),
+  WECHAT_APP_SECRET: z.string().default(""),
+  WECHAT_TOKEN: z.string().default(""),
+  WECHAT_AES_KEY: z.string().default(""),
+  WECHAT_ALLOWED_OPEN_IDS: z.string().default(""),
+  WECHAT_API_BASE: z.string().default("https://api.weixin.qq.com"),
+  QQ_ENABLED: z.string().default("false"),
+  QQ_APP_ID: z.string().default(""),
+  QQ_APP_SECRET: z.string().default(""),
+  QQ_ALLOWED_OPEN_IDS: z.string().default(""),
+  QQ_ALLOWED_GROUP_OPEN_IDS: z.string().default(""),
+  QQ_API_BASE: z.string().default("https://api.bot.qq.com"),
+  QQ_EVENT_MODE: z.enum(["websocket", "webhook", "both"]).default("websocket"),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
   PORT: z.coerce.number().default(8787)
 });
@@ -79,7 +101,8 @@ const schema = z.object({
 const env = schema.parse(process.env);
 
 const defaultCursorChatInputSelector = '.tiptap.ProseMirror[contenteditable="true"], [class*="ai-input"] textarea, [class*="composer"] textarea, [class*="composer"] [role="textbox"]';
-const defaultCursorResponseSelector = '.composer-rendered-message .anysphere-markdown-container-root, [class*="assistant-message"] [class*="markdown"], [class*="assistant"] [class*="markdown"]';
+const defaultCursorResponseSelector =
+  '[data-message-kind="assistant"], [data-message-role="ai"], [data-react-transcript-row-kind="assistantMarkdown"], .agent-transcript-row-markdown, .composer-rendered-message[data-message-kind="assistant"] .anysphere-markdown-container-root';
 const defaultCursorModeSelector = '[class*="composer-unified-dropdown-model"]';
 const defaultVscodeChatInputSelector = 'div[role="textbox"], textarea, [contenteditable="true"]';
 const defaultVscodeResponseSelector = '[class*="markdown"], [role="document"], article';
@@ -180,6 +203,58 @@ export const config = {
       .map((v) => v.trim())
       .filter((v) => v.length > 0)
   },
+  wecom: {
+    enabled: env.WECOM_ENABLED.toLowerCase() === "true",
+    corpId: env.WECOM_CORP_ID,
+    agentId: env.WECOM_AGENT_ID,
+    secret: env.WECOM_SECRET,
+    token: env.WECOM_TOKEN,
+    aesKey: env.WECOM_AES_KEY,
+    allowedUserIds: env.WECOM_ALLOWED_USER_IDS
+      .split(",")
+      .map((v) => v.trim())
+      .filter((v) => v.length > 0),
+    apiBase: env.WECOM_API_BASE.replace(/\/$/, "")
+  },
+  wechat: {
+    enabled: env.WECHAT_ENABLED.toLowerCase() === "true",
+    appId: env.WECHAT_APP_ID,
+    appSecret: env.WECHAT_APP_SECRET,
+    token: env.WECHAT_TOKEN,
+    aesKey: env.WECHAT_AES_KEY,
+    allowedOpenIds: env.WECHAT_ALLOWED_OPEN_IDS
+      .split(",")
+      .map((v) => v.trim())
+      .filter((v) => v.length > 0),
+    apiBase: env.WECHAT_API_BASE.replace(/\/$/, "")
+  },
+  qq: {
+    enabled: env.QQ_ENABLED.toLowerCase() === "true",
+    appId: env.QQ_APP_ID,
+    appSecret: env.QQ_APP_SECRET,
+    allowedOpenIds: env.QQ_ALLOWED_OPEN_IDS
+      .split(",")
+      .map((v) => v.trim())
+      .filter((v) => v.length > 0),
+    allowedGroupOpenIds: env.QQ_ALLOWED_GROUP_OPEN_IDS
+      .split(",")
+      .map((v) => v.trim())
+      .filter((v) => v.length > 0),
+    apiBase: env.QQ_API_BASE.replace(/\/$/, ""),
+    eventMode: env.QQ_EVENT_MODE
+  },
   logLevel: env.LOG_LEVEL,
   port: env.PORT
 };
+
+export function enabledAdapterNames(): string[] {
+  const names: string[] = ["http"];
+  if (config.telegramBotToken) names.push("telegram");
+  if (config.discord.enabled) names.push("discord");
+  if (config.email.enabled) names.push("email");
+  if (config.feishu.enabled) names.push("feishu");
+  if (config.wecom.enabled) names.push("wecom");
+  if (config.wechat.enabled) names.push("wechat");
+  if (config.qq.enabled) names.push("qq");
+  return names;
+}

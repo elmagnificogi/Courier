@@ -49,7 +49,7 @@ export class DiscordService {
         await message.reply(reply);
       } catch (error) {
         logger.warn({ error }, "Discord message handling failed");
-        await message.reply("Request failed. Check bridge logs for details.");
+        await message.reply("请求失败，请查看 Gantry 日志。");
       }
     });
 

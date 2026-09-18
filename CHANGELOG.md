@@ -7,7 +7,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+- Official WeCom (企业微信), WeChat Official Account, and QQ bot adapters for the same command surface as Telegram/Feishu (`/help`, `/mode`, `/choose`, prompt relay).
+- IM notification hub so CDP preflight alerts fan out to every enabled adapter, not only Telegram.
+- `/choose` support on the shared CommandRouter used by non-Telegram adapters.
+
 ### Changed
+- `TELEGRAM_BOT_TOKEN` is optional so a machine can run WeCom/WeChat/QQ/HTTP only.
 - Re-licensed Gantry from AGPL-3.0 to MIT.
 - Standardized attribution: Copyright holder is Grasp Visual LLC, created by Alan Perez.
 - Removed landing-page and enterprise marketing references from repository docs/metadata.

@@ -9,9 +9,10 @@ import { BridgeService } from "../bridge/BridgeService";
 import { BridgeMode } from "../types";
 import { ChatStateStore } from "./ChatStateStore";
 import { TextSecurityGuard } from "../security/TextSecurityGuard";
+import { notificationHub } from "../platform/NotificationHub";
 
 export class TelegramBotService {
-  private readonly bot = new Bot(config.telegramBotToken);
+  private readonly bot = new Bot(config.telegramBotToken || "0:disabled");
   private readonly bridge = new BridgeService();
   private nextRequestId = 1;
   private readonly latestDeliveredByChat = new Map<number, { requestId: number; text: string; at: number }>();
@@ -37,6 +38,9 @@ export class TelegramBotService {
   }
 
   async notifyAllUsers(text: string): Promise<void> {
+    if (!config.telegramBotToken) {
+      return;
+    }
     const userIds = config.allowedTelegramUserIds;
     if (userIds.length === 0) {
       logger.debug("notifyAllUsers: no allowed user IDs configured, skipping");
@@ -52,10 +56,13 @@ export class TelegramBotService {
   }
 
   start(): void {
-    this.bot.start();
+    if (!config.telegramBotToken) {
+      logger.info("Telegram adapter disabled");
+      return;
+    }
+    notificationHub.register("telegram", (text) => this.notifyAllUsers(text));
     if (this.restartFlag) {
-      // Notify all users bridge is back after restart
-      void this.notifyAllUsers("Bridge restarted and is now online.");
+      void this.notifyAllUsers("桥接已重启，现在在线。");
       this.restartFlag = false;
     }
     this.bot.on("message", async (ctx) => {
@@ -66,7 +73,7 @@ export class TelegramBotService {
       } catch (error) {
         logger.error({ error }, "Failed to handle Telegram message");
         if (ctx.chat?.id) {
-          await this.bot.api.sendMessage(ctx.chat.id, "Request failed. Check bridge logs for details.");
+          await this.bot.api.sendMessage(ctx.chat.id, "请求失败，请查看 Gantry 日志。");
         }
       }
     });
@@ -79,7 +86,7 @@ export class TelegramBotService {
       } catch (error) {
         logger.error({ error }, "Failed to handle Telegram callback");
         if (ctx.callbackQuery?.message?.chat.id) {
-          await this.sendText(ctx.callbackQuery.message.chat.id, "Action failed. Check bridge logs for details.");
+          await this.sendText(ctx.callbackQuery.message.chat.id, "操作失败，请查看 Gantry 日志。");
         }
       }
     });
@@ -114,7 +121,7 @@ export class TelegramBotService {
     );
 
     if (!this.isAllowedUser(msg)) {
-      await this.sendText(msg.chat.id, "Unauthorized user.");
+      await this.sendText(msg.chat.id, "未授权用户。");
       return;
     }
 

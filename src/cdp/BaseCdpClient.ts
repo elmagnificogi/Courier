@@ -209,11 +209,19 @@ export class BaseCdpClient {
   }
 
   async evaluateJson<T>(client: ClientDomains, expression: string): Promise<T | null> {
-    const evaluated = await client.Runtime.evaluate({
-      expression,
-      returnByValue: true,
-      awaitPromise: true
-    });
+    const evaluated = await Promise.race([
+      client.Runtime.evaluate({
+        expression,
+        returnByValue: true,
+        awaitPromise: true
+      }),
+      sleep(8000).then(() => null)
+    ]);
+
+    if (!evaluated) {
+      logger.warn("CDP evaluate timed out");
+      return null;
+    }
 
     if (evaluated.exceptionDetails) {
       logger.warn({ expression }, "CDP evaluate returned exception details");

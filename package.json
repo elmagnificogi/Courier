@@ -1,7 +1,7 @@
 {
   "name": "gantry",
   "version": "0.1.0",
-  "description": "Gantry — local multi-platform bridge for Cursor and Windsurf IDE control via Telegram, Discord, Email, Feishu, and HTTP API.",
+  "description": "Gantry — local multi-platform bridge for Cursor, Windsurf, and VS Code control via Telegram, WeCom, WeChat, QQ, Discord, Email, Feishu, and HTTP API.",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -22,6 +22,9 @@
     "headless",
     "cdp",
     "telegram",
+    "wecom",
+    "wechat",
+    "qq",
     "discord",
     "automation",
     "bridge",

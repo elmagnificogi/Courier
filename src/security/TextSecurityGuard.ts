@@ -39,7 +39,7 @@ export class TextSecurityGuard {
       if (pattern.test(value)) {
         return {
           allowed: false,
-          reason: "Blocked by safety policy: potential request to exfiltrate secrets/cookies/tokens."
+          reason: "已被安全策略拦截：请求可能在尝试导出 cookie、token 或密钥。"
         };
       }
     }

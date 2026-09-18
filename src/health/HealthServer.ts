@@ -1,11 +1,19 @@
-import { createServer, IncomingMessage } from "node:http";
-import { config } from "../config";
+import { createServer, IncomingMessage, ServerResponse } from "node:http";
+import { config, enabledAdapterNames } from "../config";
 import { logger } from "../logger";
 import { CommandRouter } from "../platform/CommandRouter";
 import { FeishuService } from "../platform/FeishuService";
+import { WeComService } from "../platform/WeComService";
+import { WeChatService } from "../platform/WeChatService";
+import { QQService } from "../platform/QQService";
+import { HttpResult } from "../platform/HttpResult";
+import { parseQueryPreservingPlus } from "../platform/weixinCrypto";
 
 const router = new CommandRouter();
 const feishu = new FeishuService();
+const wecom = new WeComService();
+const wechat = new WeChatService();
+const qq = new QQService();
 
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -16,25 +24,61 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
-function unauthorized(res: { statusCode: number; setHeader: (name: string, value: string) => void; end: (value: string) => void }): void {
+function unauthorized(res: ServerResponse): void {
   res.statusCode = 401;
   res.setHeader("content-type", "application/json");
   res.end(JSON.stringify({ error: "unauthorized" }));
 }
 
+function writeResult(res: ServerResponse, result: HttpResult): void {
+  res.statusCode = result.status;
+  if (typeof result.body === "string") {
+    res.setHeader("content-type", result.contentType ?? "text/plain; charset=utf-8");
+    res.end(result.body);
+    return;
+  }
+  res.setHeader("content-type", result.contentType ?? "application/json");
+  res.end(JSON.stringify(result.body));
+}
+
+function headerMap(req: IncomingMessage): Record<string, string | undefined> {
+  const mapped: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(req.headers)) {
+    if (typeof value === "string") {
+      mapped[key.toLowerCase()] = value;
+    } else if (Array.isArray(value)) {
+      mapped[key.toLowerCase()] = value[0];
+    }
+  }
+  return mapped;
+}
+
 export function startHealthServer(): void {
+  wecom.start();
+  wechat.start();
+  qq.start();
+
   const server = createServer(async (req, res) => {
     const method = req.method || "GET";
-    const url = req.url || "/";
+    const parsed = new URL(req.url || "/", `http://127.0.0.1:${config.port}`);
+    const pathname = parsed.pathname;
+    const query = parseQueryPreservingPlus(parsed.search);
 
-    if (method === "GET" && url === "/health") {
+    if (method === "GET" && pathname === "/health") {
       res.statusCode = 200;
       res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify({ ok: true, service: "gantry", backend: config.bridgeBackendMode }));
+      res.end(
+        JSON.stringify({
+          ok: true,
+          service: "gantry",
+          backend: config.bridgeBackendMode,
+          adapters: enabledAdapterNames()
+        })
+      );
       return;
     }
 
-    if (method === "POST" && url === "/v1/chat/completions") {
+    if (method === "POST" && pathname === "/v1/chat/completions") {
       if (config.bridgeApiAuthToken) {
         const auth = req.headers.authorization || "";
         if (auth !== `Bearer ${config.bridgeApiAuthToken}`) {
@@ -86,17 +130,36 @@ export function startHealthServer(): void {
       return;
     }
 
-    if (method === "POST" && url === "/platform/feishu/events") {
+    if (method === "POST" && pathname === "/platform/feishu/events") {
       const raw = await readBody(req);
-      const headerMap: Record<string, string | undefined> = {
-        "x-lark-request-timestamp": req.headers["x-lark-request-timestamp"]?.toString(),
-        "x-lark-request-nonce": req.headers["x-lark-request-nonce"]?.toString(),
-        "x-lark-signature": req.headers["x-lark-signature"]?.toString()
-      };
-      const result = await feishu.handleEvents(raw, headerMap);
-      res.statusCode = result.status;
-      res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify(result.body));
+      const headers = headerMap(req);
+      const result = await feishu.handleEvents(raw, {
+        "x-lark-request-timestamp": headers["x-lark-request-timestamp"],
+        "x-lark-request-nonce": headers["x-lark-request-nonce"],
+        "x-lark-signature": headers["x-lark-signature"]
+      });
+      writeResult(res, result);
+      return;
+    }
+
+    if ((method === "GET" || method === "POST") && pathname === "/platform/wecom/callback") {
+      const raw = method === "POST" ? await readBody(req) : "";
+      const result = await wecom.handleRequest(method, query, raw);
+      writeResult(res, result);
+      return;
+    }
+
+    if ((method === "GET" || method === "POST") && pathname === "/platform/wechat/callback") {
+      const raw = method === "POST" ? await readBody(req) : "";
+      const result = await wechat.handleRequest(method, query, raw);
+      writeResult(res, result);
+      return;
+    }
+
+    if (method === "POST" && pathname === "/platform/qq/events") {
+      const raw = await readBody(req);
+      const result = await qq.handleEvents(raw, headerMap(req));
+      writeResult(res, result);
       return;
     }
 

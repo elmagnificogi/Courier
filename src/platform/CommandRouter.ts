@@ -3,6 +3,7 @@ import { BridgeMode } from "../types";
 import { ChatStateStore } from "../telegram/ChatStateStore";
 import { TextSecurityGuard } from "../security/TextSecurityGuard";
 import { config } from "../config";
+import { buildMultiChoiceRelayPrompt, buildSingleChoiceRelayPrompt, chooseUsageText } from "./choosePrompt";
 
 interface ProgressState {
   requestId: number;
@@ -22,7 +23,7 @@ export class CommandRouter {
   async handle(channelId: string, text: string): Promise<string> {
     const value = text.trim();
     if (!value) {
-      return "Empty message.";
+      return "消息为空。";
     }
 
     if (value === "/help" || value === "/start") {
@@ -42,7 +43,7 @@ export class CommandRouter {
       const mode = value.replace("/mode", "").trim().toLowerCase() as BridgeMode;
       const validModes = config.bridgeIdeTarget === "windsurf" ? ["ask", "code", "plan"] : ["ask", "code", "plan", "debug"];
       if (!validModes.includes(mode)) {
-        return `Invalid mode. Use: /mode ${validModes.join("|")}`;
+        return `模式无效。请使用：/mode ${validModes.join("|")}`;
       }
       return TextSecurityGuard.sanitizeOutbound(await this.bridge.switchMode(mode));
     }
@@ -76,15 +77,15 @@ export class CommandRouter {
       }
       const index = Number(arg);
       if (!Number.isInteger(index) || index <= 0) {
-        return "Invalid target. Use /target <index> or /target auto.";
+        return "目标无效。请使用 /target <序号> 或 /target auto。";
       }
       return TextSecurityGuard.sanitizeOutbound(await this.bridge.selectTarget(index));
     }
     if (value === "/queue") {
-      return "Attachment queue is only available in Telegram mode.";
+      return "附件队列仅在 Telegram 中可用。";
     }
     if (value === "/clearqueue") {
-      return "Attachment queue is only available in Telegram mode.";
+      return "附件队列仅在 Telegram 中可用。";
     }
     if (value === "/progress") {
       return this.progressStatus(channelId);
@@ -102,7 +103,7 @@ export class CommandRouter {
         return TextSecurityGuard.sanitizeOutbound(latest);
       }
       const stored = this.stateStore.getLastDelivered(this.channelKeyToNumber(channelId));
-      return TextSecurityGuard.sanitizeOutbound(stored?.text ?? "No response available yet.");
+      return TextSecurityGuard.sanitizeOutbound(stored?.text ?? "还没有助手回复。");
     }
     if (value.startsWith("/history")) {
       return this.history(channelId, value);
@@ -115,18 +116,49 @@ export class CommandRouter {
       const previous = this.lastPromptByChannel.get(channelId)?.prompt
         ?? this.stateStore.getLastPrompt(this.channelKeyToNumber(channelId))?.prompt;
       if (!previous) {
-        return "No previous prompt found.";
+        return "没有找到上一次任务。";
       }
-      return await this.relayPrompt(channelId, `Continue the previous task.\nOriginal request: ${previous}`);
+      return await this.relayPrompt(channelId, `继续上一次任务。\n原始请求：${previous}`);
+    }
+    if (value.startsWith("/choose")) {
+      return await this.handleChoose(channelId, value);
     }
 
     return TextSecurityGuard.sanitizeOutbound(await this.relayPrompt(channelId, value));
   }
 
+  private async handleChoose(channelId: string, text: string): Promise<string> {
+    const latest = (await this.bridge.latestResponse())
+      ?? this.stateStore.getLastDelivered(this.channelKeyToNumber(channelId))?.text;
+    if (!latest) {
+      return "当前没有待回答的助手问题。可先发送 /last 查看上一条回复。";
+    }
+    const raw = text.replace(/^\/choose/i, "").trim();
+    if (!raw) {
+      return chooseUsageText();
+    }
+    const lower = raw.toLowerCase();
+    const relayPrompt = lower.startsWith("multi ")
+      ? buildMultiChoiceRelayPrompt(latest, raw.slice(6).trim())
+      : buildSingleChoiceRelayPrompt(latest, raw);
+    if (!relayPrompt) {
+      return [
+        "/choose 格式无效。",
+        "",
+        "示例：",
+        "- `/choose A`",
+        "- `/choose D 先用只读模式执行`",
+        "- `/choose multi A,B`",
+        "- `/choose multi B,D:同时加上日志`"
+      ].join("\n");
+    }
+    return await this.relayPrompt(channelId, relayPrompt);
+  }
+
   private async relayPrompt(channelId: string, prompt: string): Promise<string> {
     const policy = TextSecurityGuard.evaluatePrompt(prompt);
     if (!policy.allowed) {
-      return policy.reason ?? "Blocked by safety policy.";
+      return policy.reason ?? "已被安全策略拦截。";
     }
     const requestId = this.nextRequestId++;
     const startedAt = Date.now();
@@ -150,27 +182,27 @@ export class CommandRouter {
   private progressStatus(channelId: string): string {
     const progress = this.progressByChannel.get(channelId);
     if (!progress) {
-      return "No active request in progress.";
+      return "当前没有进行中的请求。";
     }
     const elapsed = Math.max(0, Math.round((Date.now() - progress.startedAt) / 1000));
-    return `Request #${progress.requestId} is ${progress.phase}. Elapsed: ${elapsed}s.`;
+    return `请求 #${progress.requestId} 正在${progress.phase === "running" ? "执行" : progress.phase}。已用时：${elapsed}秒。`;
   }
 
   private cancel(channelId: string): string {
     const requestId = this.activeRequestByChannel.get(channelId);
     if (!requestId) {
-      return "No active request to cancel.";
+      return "没有可取消的请求。";
     }
     this.activeRequestByChannel.delete(channelId);
     this.progressByChannel.delete(channelId);
-    return `Cancelled active request #${requestId}.`;
+    return `已取消进行中的请求 #${requestId}。`;
   }
 
   private cancelAll(): string {
     const count = this.activeRequestByChannel.size;
     this.activeRequestByChannel.clear();
     this.progressByChannel.clear();
-    return count > 0 ? `Cancelled ${count} active request(s).` : "No active requests to cancel.";
+    return count > 0 ? `已取消 ${count} 个进行中的请求。` : "没有可取消的请求。";
   }
 
   private history(channelId: string, text: string): string {
@@ -178,7 +210,7 @@ export class CommandRouter {
     const chatId = this.channelKeyToNumber(channelId);
     if (arg === "clear") {
       const removed = this.stateStore.clearHistory(chatId);
-      return removed > 0 ? `Cleared ${removed} history entr${removed === 1 ? "y" : "ies"}.` : "History is already empty.";
+      return removed > 0 ? `已清除 ${removed} 条历史记录。` : "历史记录已经是空的。";
     }
     let limit = Number(arg);
     if (!Number.isFinite(limit) || limit <= 0) {
@@ -187,7 +219,7 @@ export class CommandRouter {
     limit = Math.min(limit, 10);
     const history = this.stateStore.getHistory(chatId, limit);
     if (history.length === 0) {
-      return "No response history available yet.";
+      return "还没有回复历史。";
     }
     return TextSecurityGuard.sanitizeOutbound(
       history.map((item, idx) => `${idx + 1}. [${new Date(item.at).toISOString()}] ${item.text}`).join("\n")
@@ -204,21 +236,23 @@ export class CommandRouter {
 
   private helpText(): string {
     return [
-      "Bridge commands:",
-      config.bridgeIdeTarget === "windsurf" ? "/mode ask|code|plan" : "/mode ask|code|plan|debug",
-      "/model [model-name]",
-      "/newchat",
-      "/context",
-      "/usage",
-      "/progress",
-      "/resume [optional instruction]",
-      "/cancel [all]",
-      "/last",
-      "/history [optional count|clear]",
-      "/chats",
-      "/targets",
-      "/target <index>|auto",
-      "/diag"
+      "Gantry 命令：",
+      config.bridgeIdeTarget === "windsurf" ? "/mode ask|code|plan" : "/mode ask|code|plan|debug  切换模式",
+      "/model [模型名]  查看或切换模型",
+      "/newchat  新开 IDE 对话",
+      "/context  Context 用量",
+      "/usage  用量状态",
+      "/progress  当前请求进度",
+      "/resume [补充说明]  继续上次任务",
+      "/cancel [all]  取消请求",
+      "/last  上一条助手回复",
+      "/choose A|B|C|D [自定义]  回答助手提问",
+      "/history [条数|clear]  历史记录",
+      "/chats  列出 IDE 目标",
+      "/targets  同 /chats",
+      "/target <序号>|auto  选择目标",
+      "/diag  诊断",
+      "/whoami  查看你的 QQ openid"
     ].join("\n");
   }
 }

@@ -98,7 +98,7 @@ export class CursorAutomationClient {
     if (selection === "auto") {
       this.cdp.clearManualTarget();
       return {
-        text: "Target selection set to auto.",
+        text: "已切换为自动选择目标。",
         metadata: { target_mode: "auto" }
       };
     }
@@ -107,13 +107,13 @@ export class CursorAutomationClient {
     if (!target) {
       const pages = await this.cdp.listPageTargets();
       return {
-        text: `Invalid target index ${selection}. Use /targets to list valid indices (1-${pages.length}).`,
+        text: `目标序号 ${selection} 无效。请用 /targets 查看有效范围（1-${pages.length}）。`,
         metadata: { target_mode: "manual", status: "invalid-index" }
       };
     }
 
     return {
-      text: `Pinned target #${selection}: ${target.title || "(untitled)"}`,
+      text: `已固定目标 #${selection}：${target.title || "（无标题）"}`,
       metadata: { target_mode: "manual", target_id: target.id, target_title: target.title }
     };
   }
@@ -190,7 +190,7 @@ export class CursorAutomationClient {
 
       if (!switched.ok) {
         return {
-          text: `Mode switch could not be verified for ${mode}. Current detected mode: ${switched.detectedMode ?? "unknown"}.`,
+          text: `${mode} 模式切换未能确认。当前检测到的模式：${switched.detectedMode ?? "未知"}。`,
           metadata: {
             mapped_to: aliases.join("/"),
             detected_mode: switched.detectedMode,
@@ -200,7 +200,7 @@ export class CursorAutomationClient {
       }
 
       return {
-        text: `Mode switched: ${mode} -> ${switched.detectedMode ?? aliases[0]}.`,
+        text: `已切换模式：${mode} → ${switched.detectedMode ?? aliases[0]}。`,
         metadata: {
           mapped_to: aliases.join("/"),
           detected_mode: switched.detectedMode,
@@ -210,7 +210,7 @@ export class CursorAutomationClient {
     } catch (error) {
       logger.warn({ error, mode }, "CDP mode switching failed");
       return {
-        text: `Mode switch failed through CDP for ${mode}.`,
+        text: `通过 CDP 切换 ${mode} 模式失败。`,
         metadata: { mapped_to: aliases.join("/"), status: "failed" }
       };
     }
@@ -249,13 +249,18 @@ export class CursorAutomationClient {
         }
 
         await this.cdp.sendShortcut(client, "Enter", "Enter", 13, 0);
-        const responseSnippet = await this.pollLatestAssistantSnippet(client, config.cursorActionTimeoutMs, baselineSnippet);
+        const responseSnippet = await this.pollLatestAssistantSnippet(
+          client,
+          config.cursorActionTimeoutMs,
+          baselineSnippet,
+          prompt
+        );
         return { delivered: true, responseSnippet };
       });
 
       if (!relayResult.delivered) {
         return {
-          text: "Prompt relay failed: chat input could not be focused or text injection failed.",
+          text: "提示词转发失败：无法聚焦聊天输入框，或文本注入失败。",
           metadata: { status: "failed" }
         };
       }
@@ -269,14 +274,14 @@ export class CursorAutomationClient {
 
       return {
         text:
-          "Prompt delivered, but response capture is still pending.\n" +
-          "Try /diag and resend if no reply appears shortly.",
+          "提示词已送达，但还没有捕获到回复。\n" +
+          "如果稍后仍无回复，请发送 /diag 后再重试。",
         metadata: { status: "delivered-no-snippet" }
       };
     } catch (error) {
       logger.warn({ error }, "CDP prompt relay failed");
       return {
-        text: "Prompt relay failed through CDP. Check remote debugging endpoint and target selection.",
+        text: "通过 CDP 转发提示词失败。请检查远程调试端口和目标选择。",
         metadata: { status: "failed" }
       };
     }
@@ -299,12 +304,12 @@ export class CursorAutomationClient {
         return await this.detectCurrentModel(client);
       });
       if (model) {
-        return { text: `Current model: ${model}`, metadata: { model, status: "detected" } };
+        return { text: `当前模型：${model}`, metadata: { model, status: "detected" } };
       }
-      return { text: "Could not detect current model.", metadata: { status: "undetected" } };
+      return { text: "无法检测当前模型。", metadata: { status: "undetected" } };
     } catch (error) {
       logger.warn({ error }, "CDP model detection failed");
-      return { text: "Model detection failed through CDP.", metadata: { status: "failed" } };
+      return { text: "通过 CDP 检测模型失败。", metadata: { status: "failed" } };
     }
   }
 
@@ -315,17 +320,17 @@ export class CursorAutomationClient {
       });
       if (result.ok) {
         return {
-          text: `Model switched to: ${result.selectedModel ?? modelName}`,
+          text: `已切换模型：${result.selectedModel ?? modelName}`,
           metadata: { model: result.selectedModel, status: "switched" }
         };
       }
       return {
-        text: `Could not switch to model "${modelName}". Current: ${result.selectedModel ?? "unknown"}. Use /model to see current model.`,
+        text: `无法切换到模型 "${modelName}"。当前：${result.selectedModel ?? "未知"}。可用 /model 查看当前模型。`,
         metadata: { model: result.selectedModel, status: "not-found" }
       };
     } catch (error) {
       logger.warn({ error, modelName }, "CDP model switching failed");
-      return { text: `Model switch failed through CDP for "${modelName}".`, metadata: { status: "failed" } };
+      return { text: `通过 CDP 切换模型 "${modelName}" 失败。`, metadata: { status: "failed" } };
     }
   }
 
@@ -351,7 +356,7 @@ export class CursorAutomationClient {
 
       if (result.cleared) {
         return {
-          text: "New chat shortcut dispatched through CDP and composer cleared.",
+          text: "已通过 CDP 发送新对话快捷键，并清空输入框。",
           metadata: { status: "dispatched-cdp-cleared", focused: result.focused }
         };
       }
@@ -371,7 +376,7 @@ export class CursorAutomationClient {
       };
     } catch (error) {
       logger.warn({ error }, "New chat shortcut dispatch failed");
-      return { text: "New chat dispatch failed; manual fallback required.", metadata: { status: "failed" } };
+      return { text: "新对话发送失败，需要在 IDE 里手动处理。", metadata: { status: "failed" } };
     }
   }
 
@@ -1220,26 +1225,42 @@ export class CursorAutomationClient {
   private async pollLatestAssistantSnippet(
     client: ClientDomains,
     timeoutMs: number,
-    baselineSnippet: string | null
+    baselineSnippet: string | null,
+    prompt?: string
   ): Promise<string | null> {
     const deadline = Date.now() + timeoutMs;
+    const promptNorm = (prompt ?? "").trim();
     let lastValue: string | null = baselineSnippet;
     let changedAtMs: number | null = null;
     while (Date.now() < deadline) {
       const snippet = await this.readLatestAssistantSnippet(client);
-      if (snippet && snippet !== baselineSnippet) {
+      if (snippet && snippet !== baselineSnippet && !this.isPromptEcho(snippet, promptNorm)) {
         if (snippet !== lastValue) {
           changedAtMs = Date.now();
         }
         lastValue = snippet;
         // Return once response changed and appears stable briefly.
-        if (changedAtMs !== null && Date.now() - changedAtMs >= 900) {
+        if (changedAtMs !== null && Date.now() - changedAtMs >= 1200) {
           return lastValue;
         }
       }
       await wait(300);
     }
-    return lastValue && lastValue !== baselineSnippet ? lastValue : null;
+    return lastValue && lastValue !== baselineSnippet && !this.isPromptEcho(lastValue, promptNorm)
+      ? lastValue
+      : null;
+  }
+
+  private isPromptEcho(snippet: string, prompt: string): boolean {
+    if (!prompt) {
+      return false;
+    }
+    const value = snippet.trim();
+    if (value === prompt) {
+      return true;
+    }
+    const firstLine = value.split("\n")[0]?.trim() ?? "";
+    return firstLine === prompt && value.length <= prompt.length + 24;
   }
 
   private async readLatestAssistantSnippet(client: ClientDomains): Promise<string | null> {
@@ -1271,31 +1292,59 @@ export class CursorAutomationClient {
           return kept.join('\\n').trim();
         }
 
+        function isHuman(el) {
+          if (!el || !el.closest) return false;
+          const host = el.closest('[data-message-role],[data-message-kind],.composer-human-message,.composer-human-message-container');
+          if (!host) return false;
+          const role = String(host.getAttribute('data-message-role') || '').toLowerCase();
+          const kind = String(host.getAttribute('data-message-kind') || '').toLowerCase();
+          if (role === 'human' || role === 'user') return true;
+          if (kind === 'human' || kind === 'user') return true;
+          const cls = String(host.className || '');
+          return /composer-human-message|human-message/.test(cls);
+        }
+
+        function isStatusChrome(text) {
+          return /^(worked for|thought|thinking|just now|generating|cursor grok)/i.test(text.trim());
+        }
+
+        function pickText(el) {
+          const md = el.querySelector('.anysphere-markdown-container-root, .agent-transcript-row-markdown, [class*="ui-markdown"], [class*="markdown"]');
+          return sanitize(getNodeText(md || el));
+        }
+
+        const assistantHosts = Array.from(document.querySelectorAll(
+          '[data-message-kind="assistant"], [data-message-role="ai"], [data-react-transcript-row-kind="assistantMarkdown"]'
+        ));
+        for (let i = assistantHosts.length - 1; i >= 0; i -= 1) {
+          const el = assistantHosts[i];
+          if (isHuman(el)) continue;
+          const txt = pickText(el);
+          if (txt && !isStatusChrome(txt)) return txt.slice(0, 3200);
+        }
+
         const configured = ${selectorLiteral};
         if (configured) {
           const nodes = Array.from(document.querySelectorAll(configured));
-          if (nodes.length > 0) {
-            const txt = sanitize(getNodeText(nodes[nodes.length - 1]));
-            return txt ? txt.slice(0, 3200) : null;
+          for (let i = nodes.length - 1; i >= 0; i -= 1) {
+            if (isHuman(nodes[i])) continue;
+            const txt = sanitize(getNodeText(nodes[i]));
+            if (txt && !isStatusChrome(txt)) return txt.slice(0, 3200);
           }
         }
 
-        const selectors = [
-          '[data-role*="assistant"]',
-          '[class*="assistant"]',
-          '[data-testid*="assistant"]',
-          '[class*="composer-rendered-message"]',
+        const preferredSelectors = [
+          '.agent-transcript-row-markdown',
           '.anysphere-markdown-container-root',
-          'article',
-          '[role="article"]',
-          '.message'
+          '[class*="assistant-message"]',
+          '[data-testid*="assistant"]'
         ];
-        const candidates = Array.from(document.querySelectorAll(selectors.join(',')));
-        for (let i = candidates.length - 1; i >= 0; i -= 1) {
-          const node = candidates[i];
-          const txt = sanitize(getNodeText(node));
-          if (txt.length >= 8) {
-            return txt.slice(0, 3200);
+        for (const sel of preferredSelectors) {
+          const nodes = Array.from(document.querySelectorAll(sel));
+          for (let i = nodes.length - 1; i >= 0; i -= 1) {
+            if (isHuman(nodes[i])) continue;
+            const txt = sanitize(getNodeText(nodes[i]));
+            if (txt && !isStatusChrome(txt)) return txt.slice(0, 3200);
           }
         }
         return null;
