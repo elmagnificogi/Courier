@@ -320,11 +320,14 @@ export class BaseCdpClient {
 
     scored.sort((a, b) => b.score - a.score);
     const sticky = BaseCdpClient.sharedSelectionByEndpoint.get(this.endpointKey);
+    const urlIsUnique = new Set(pages.map((page) => page.url)).size === pages.length;
     const stickyMatch =
       pages.find((page) => {
         if (!sticky) return false;
-        if (sticky.lastTargetUrl && page.url === sticky.lastTargetUrl) return true;
         if (sticky.lastTargetTitle && page.title === sticky.lastTargetTitle) return true;
+        // Cursor windows share the same workbench.html URL, so URL sticky-match
+        // would always pin the first listed window.
+        if (urlIsUnique && sticky.lastTargetUrl && page.url === sticky.lastTargetUrl) return true;
         return false;
       }) ?? null;
     const selected = stickyMatch ?? scored[0]?.page ?? pages[0];
@@ -353,6 +356,8 @@ export class BaseCdpClient {
       title.includes("keybindings");
 
     if (title.includes(hint)) score += 8;
+    const cwdName = process.cwd().split(/[/\\]/).filter(Boolean).at(-1)?.toLowerCase();
+    if (cwdName && cwdName.length >= 2 && title.includes(cwdName)) score += 14;
     if (fileLikeTitle) score -= 20;
     if (settingsLikeTitle) score -= 28;
     if (title.includes("plan") || title.includes("readme")) score -= 6;
