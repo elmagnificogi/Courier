@@ -178,6 +178,22 @@ npm run dev
 
 健康检查：[http://localhost:8787/health](http://localhost:8787/health)
 
+### 5. Windows 开机（登录后）自动启动
+
+Courier 需要当前用户桌面会话（要连本机 Cursor 的 CDP），所以用「登录时」计划任务，而不是 Windows 服务。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows/install-autostart.ps1
+```
+
+之后每次登录会后台拉起 Courier。若 8787 已经在听则跳过，避免重复实例。日志在 `tmp/courier-autostart.log`。卸载：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows/uninstall-autostart.ps1
+```
+
+Cursor 仍需用 `--remote-debugging-port=9222` 打开（例如桌面上的「Cursor 调试」快捷方式），否则 QQ 能连上 Courier，但没法注入对话。
+
 ---
 
 ## 国内 IM 接入（企业微信 / 微信 / QQ）
@@ -584,6 +600,8 @@ $env:DOTENV_CONFIG_PATH=".env.windsurf"; npx tsx src/index.ts
 | `npm run test:smoke` | 快速冒烟：护栏 + 本地会话状态持久化 |
 | `npm run scan:secrets` | 扫描已跟踪文件中的高风险密钥/PII 模式 |
 | `npm run verify:release` | 发布门禁：verify + smoke + secret scan |
+| `scripts/windows/install-autostart.ps1` | 注册 Windows 登录后自动启动 Courier |
+| `scripts/windows/uninstall-autostart.ps1` | 移除该计划任务 |
 
 **诊断：**
 
