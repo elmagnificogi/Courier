@@ -17,6 +17,7 @@ export interface BridgeResponse {
 export interface AgentProgressEvent {
   phase: "thinking" | "waiting" | "working";
   text: string;
+  content?: string;
 }
 
 export interface SendPromptOptions {

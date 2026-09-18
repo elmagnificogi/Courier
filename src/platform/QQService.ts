@@ -5,7 +5,19 @@ import { AgentProgressEvent } from "../types";
 import { CommandRouter } from "./CommandRouter";
 import { notificationHub } from "./NotificationHub";
 import { HttpResult } from "./HttpResult";
+import { TextSecurityGuard } from "../security/TextSecurityGuard";
 import { ed25519PrivateKeyDer, MessageDeduper, splitMessage } from "./weixinCrypto";
+
+const QQ_STREAM_MAX_CHARS = 4000;
+
+interface C2cStreamState {
+  streamMsgId: string | null;
+  index: number;
+  sent: string;
+  msgSeq: number | null;
+  contentType: "markdown" | "text";
+  failed: boolean;
+}
 
 interface TokenCache {
   value: string;
@@ -232,12 +244,46 @@ export class QQService {
     memberOpenId?: string
   ): Promise<void> {
     const channelId = kind === "private" ? `qq:${targetId}` : `qq-group:${targetId}:${memberOpenId ?? ""}`;
-    const send = (content: string) =>
-      kind === "private" ? this.sendPrivate(targetId, content, msgId) : this.sendGroup(targetId, content, msgId);
+    const send = (content: string, markdown = false) =>
+      kind === "private"
+        ? this.sendPrivate(targetId, content, msgId, markdown)
+        : this.sendGroup(targetId, content, msgId, markdown);
 
     if (!this.isRelayText(text)) {
       const reply = await this.router.handle(channelId, text);
       await send(reply);
+      return;
+    }
+
+    if (kind === "private") {
+      await this.sendPrivate(targetId, "已转发给 Cursor，正在流式同步回复…", msgId);
+      const stream: C2cStreamState = {
+        streamMsgId: null,
+        index: 0,
+        sent: "",
+        msgSeq: null,
+        contentType: "markdown",
+        failed: false
+      };
+      const reply = await this.router.handle(channelId, text, {
+        onProgress: async (event) => {
+          const snapshot = event.content?.trim();
+          if (snapshot) {
+            await this.pushC2cStream(targetId, msgId, stream, snapshot, false);
+          }
+        }
+      });
+      if (reply) {
+        const closed = await this.pushC2cStream(targetId, msgId, stream, reply, true);
+        if (!closed) {
+          const leftover = stream.sent && reply.startsWith(stream.sent) ? reply.slice(stream.sent.length) : reply;
+          if (leftover.trim() && leftover.trim() !== stream.sent.trim()) {
+            await this.sendPrivate(targetId, leftover, msgId, true);
+          }
+        }
+      } else if (!stream.sent) {
+        await this.sendPrivate(targetId, "提示词已送达，但还没有捕获到完整回复。", msgId);
+      }
       return;
     }
 
@@ -246,6 +292,9 @@ export class QQService {
     let lastProgressAt = 0;
     const reply = await this.router.handle(channelId, text, {
       onProgress: async (event) => {
+        if (event.content) {
+          return;
+        }
         const formatted = this.formatProgress(event);
         const now = Date.now();
         if (formatted === lastProgress || now - lastProgressAt < 8000) {
@@ -257,7 +306,7 @@ export class QQService {
       }
     });
     if (reply && reply !== lastProgress) {
-      await send(reply);
+      await send(reply, true);
     }
   }
 
@@ -532,45 +581,176 @@ export class QQService {
     return this.token.value;
   }
 
-  private async sendPrivate(openId: string, text: string, msgId?: string): Promise<void> {
-    await this.sendChunks(`/v2/users/${encodeURIComponent(openId)}/messages`, text, msgId);
+  private async sendPrivate(openId: string, text: string, msgId?: string, markdown = false): Promise<void> {
+    await this.sendChunks(`/v2/users/${encodeURIComponent(openId)}/messages`, text, msgId, markdown);
   }
 
-  private async sendGroup(groupOpenId: string, text: string, msgId?: string): Promise<void> {
-    await this.sendChunks(`/v2/groups/${encodeURIComponent(groupOpenId)}/messages`, text, msgId);
+  private async sendGroup(groupOpenId: string, text: string, msgId?: string, markdown = false): Promise<void> {
+    await this.sendChunks(`/v2/groups/${encodeURIComponent(groupOpenId)}/messages`, text, msgId, markdown);
   }
 
-  private async sendChunks(path: string, text: string, msgId?: string): Promise<void> {
+  private async sendChunks(path: string, text: string, msgId?: string, markdown = false): Promise<void> {
     const token = await this.getAccessToken();
-    const chunks = splitMessage(text);
+    const chunks = splitMessage(text, markdown ? 4000 : 1800);
     for (const content of chunks) {
       if (!content.trim()) {
         continue;
       }
-      let response = await this.postMessage(path, token, content, msgId);
+      let usedMarkdown = markdown;
+      let response = await this.postMessage(path, token, content, msgId, usedMarkdown);
+      if (!response.ok && usedMarkdown) {
+        const errBody = await response.text().catch(() => "");
+        logger.warn({ status: response.status, errBody, path }, "QQ markdown send failed, retrying as text");
+        usedMarkdown = false;
+        response = await this.postMessage(path, token, content, msgId, false);
+      }
       if (!response.ok && msgId) {
         const errBody = await response.text().catch(() => "");
         logger.warn({ status: response.status, errBody, path }, "QQ passive send failed, retrying as proactive");
-        response = await this.postMessage(path, token, content);
+        response = await this.postMessage(path, token, content, undefined, usedMarkdown);
       }
       if (!response.ok) {
         const errBody = await response.text().catch(() => "");
         throw new Error(`QQ send failed: ${response.status} ${errBody}`);
       }
-      logger.info({ path, chars: content.length }, "QQ message sent");
+      logger.info({ path, chars: content.length, markdown: usedMarkdown }, "QQ message sent");
     }
+  }
+
+  private async pushC2cStream(
+    openId: string,
+    msgId: string,
+    state: C2cStreamState,
+    full: string,
+    done: boolean
+  ): Promise<boolean> {
+    if (state.failed) {
+      return false;
+    }
+    const sanitized = TextSecurityGuard.sanitizeOutbound(full).trim();
+    if (!sanitized && !done) {
+      return true;
+    }
+    if (state.sent && sanitized && sanitized.length < state.sent.length && state.sent.startsWith(sanitized)) {
+      if (!done) {
+        return true;
+      }
+    }
+    const diverged = Boolean(state.sent && sanitized && !sanitized.startsWith(state.sent));
+    if (diverged && !done) {
+      return true;
+    }
+    let next = diverged ? state.sent : sanitized || state.sent;
+    if (next.length > QQ_STREAM_MAX_CHARS) {
+      next = next.slice(0, QQ_STREAM_MAX_CHARS);
+      if (state.sent && !next.startsWith(state.sent)) {
+        next = state.sent;
+      }
+    }
+    if (!next) {
+      if (!done) {
+        return true;
+      }
+      if (!state.streamMsgId) {
+        return false;
+      }
+    }
+    if (!done && next === state.sent) {
+      return true;
+    }
+
+    const sendOnce = async (contentType: "markdown" | "text"): Promise<boolean> => {
+      const token = await this.getAccessToken();
+      if (state.msgSeq === null) {
+        const nextSeq = (this.seqByMsgId.get(msgId) ?? 0) + 1;
+        this.seqByMsgId.set(msgId, nextSeq);
+        state.msgSeq = nextSeq;
+      }
+      const body: Record<string, unknown> = {
+        input_mode: "replace",
+        input_state: done ? 10 : 1,
+        index: state.index,
+        content_type: contentType,
+        content_raw: next || " ",
+        msg_seq: state.msgSeq
+      };
+      if (msgId) {
+        body.msg_id = msgId;
+      }
+      if (state.streamMsgId) {
+        body.stream_msg_id = state.streamMsgId;
+        body.is_wakeup = true;
+      }
+      const path = `/v2/users/${encodeURIComponent(openId)}/stream_messages`;
+      const response = await fetch(`${config.qq.apiBase}${path}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+          authorization: `QQBot ${token}`,
+          "x-union-appid": config.qq.appId
+        },
+        body: JSON.stringify(body)
+      });
+      const raw = await response.text().catch(() => "");
+      if (!response.ok) {
+        logger.warn(
+          { status: response.status, errBody: raw, path, index: state.index, contentType },
+          "QQ stream send failed"
+        );
+        return false;
+      }
+      let parsed: { id?: string; remain_msg_len?: number } = {};
+      try {
+        parsed = raw ? (JSON.parse(raw) as { id?: string; remain_msg_len?: number }) : {};
+      } catch {
+        parsed = {};
+      }
+      if (!state.streamMsgId && parsed.id) {
+        state.streamMsgId = parsed.id;
+      }
+      state.sent = next;
+      state.index += 1;
+      state.contentType = contentType;
+      logger.info(
+        { path, chars: next.length, index: state.index, done, remain: parsed.remain_msg_len ?? null },
+        "QQ stream chunk sent"
+      );
+      return true;
+    };
+
+    let ok = await sendOnce(state.contentType);
+    if (!ok && state.contentType === "markdown") {
+      state.contentType = "text";
+      ok = await sendOnce("text");
+    }
+    if (!ok && !state.streamMsgId && msgId) {
+      logger.warn("QQ stream unavailable, falling back to normal messages");
+      state.failed = true;
+      return false;
+    }
+    if (!ok) {
+      state.failed = true;
+      return false;
+    }
+    if (diverged) {
+      return false;
+    }
+    if (done && sanitized.length > state.sent.length && sanitized.startsWith(state.sent)) {
+      return false;
+    }
+    return true;
   }
 
   private async postMessage(
     path: string,
     token: string,
     content: string,
-    msgId?: string
+    msgId: string | undefined,
+    markdown = false
   ): Promise<Response> {
-    const body: Record<string, unknown> = {
-      content,
-      msg_type: 0
-    };
+    const body: Record<string, unknown> = markdown
+      ? { msg_type: 2, markdown: { content } }
+      : { content, msg_type: 0 };
     if (msgId) {
       body.msg_id = msgId;
       const nextSeq = (this.seqByMsgId.get(msgId) ?? 0) + 1;

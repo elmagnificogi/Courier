@@ -1278,6 +1278,13 @@ export class CursorAutomationClient {
         if (markdown !== lastMarkdown) {
           lastMarkdown = markdown;
           stableAt = Date.now();
+          if (options.onProgress) {
+            await options.onProgress({
+              phase: "working",
+              text: markdown,
+              content: markdown
+            });
+          }
         } else {
           if (stableAt === 0) {
             stableAt = Date.now();
@@ -1289,7 +1296,7 @@ export class CursorAutomationClient {
           }
         }
       }
-      await wait(800);
+      await wait(options.onProgress ? 500 : 800);
     }
 
     return lastMarkdown && lastMarkdown !== options.baselineSnippet ? lastMarkdown : null;
