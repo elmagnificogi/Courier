@@ -28,6 +28,13 @@ function testTextSecurityGuard(): void {
   );
   assert.ok(sanitized.includes("authorization: bearer [REDACTED]"), "bearer token should be redacted");
   assert.ok(sanitized.includes("CURSOR_API_KEY=[REDACTED]"), "assignment-style secrets should be redacted");
+
+  const targets = TextSecurityGuard.sanitizeOutbound(
+    "1. 2026-09-17-Cursor-Origin-GrokBot.md - elmagnificogi.github.io - Cursor\n2. .env - Gantry - Cursor\nvscode-file://vscode-app/d:/cursor/resources/app/out/vs/code/electron-sandbox/workbench/workbench.html"
+  );
+  assert.ok(targets.includes("2026-09-17-Cursor-Origin-GrokBot.md"), "window titles should not be redacted");
+  assert.ok(targets.includes("electron-sandbox"), "workbench paths should not be redacted");
+  assert.ok(!targets.includes("[REDACTED_TOKEN]"), "ordinary IDE titles should not look like tokens");
 }
 
 function testChatStateStorePersistence(): void {

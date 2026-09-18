@@ -1,6 +1,6 @@
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
-import { BridgeMode, BridgeResponse } from "../types";
+import { BridgeMode, BridgeResponse, SendPromptOptions } from "../types";
 import { logger } from "../logger";
 import { config } from "../config";
 import { ClientDomains, CdpTargetSummary, wait } from "../cdp/BaseCdpClient";
@@ -143,7 +143,7 @@ export class WindsurfAutomationClient {
 
   async sendPrompt(
     prompt: string,
-    _options?: { preferAttachmentComposer?: boolean; attachmentKind?: "photo" | "document"; attachmentFileName?: string }
+    _options?: SendPromptOptions
   ): Promise<BridgeResponse> {
     logger.info({ length: prompt.length }, "Windsurf prompt relay requested");
 

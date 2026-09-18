@@ -5,7 +5,7 @@ import { spawn } from "child_process";
 import path from "path";
 import { WindsurfAutomationClient } from "../windsurf/WindsurfAutomationClient";
 import { ImageInjectionService } from "../media/ImageInjectionService";
-import { BridgeMode } from "../types";
+import { BridgeMode, SendPromptOptions } from "../types";
 import { config } from "../config";
 import { CursorApiBackend } from "../backends/CursorApiBackend";
 import { logger } from "../logger";
@@ -76,11 +76,11 @@ export class BridgeService {
     return result.text;
   }
 
-  async relayPrompt(prompt: string): Promise<string> {
+  async relayPrompt(prompt: string, options?: SendPromptOptions): Promise<string> {
     if (config.bridgeBackendMode === "api") {
       return (await this.apiBackend.relayPrompt(prompt)).text;
     }
-    const result = await this.ideClient.sendPrompt(prompt);
+    const result = await this.ideClient.sendPrompt(prompt, options);
     return result.text;
   }
 
@@ -183,7 +183,7 @@ export class BridgeService {
       .slice(0, 10)
       .map((target, index) => {
         const pinned = selection.mode === "manual" && selection.manualTargetId === target.id ? " [已固定]" : "";
-        return `${index + 1}. ${target.title || "（无标题）"}${pinned} | ${target.url || "（无 URL）"}`;
+        return `${index + 1}. ${target.title || "（无标题）"}${pinned}`;
       });
 
     const header =

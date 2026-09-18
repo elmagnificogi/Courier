@@ -1,6 +1,6 @@
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
-import { BridgeMode, BridgeResponse } from "../types";
+import { AgentProgressEvent, BridgeMode, BridgeResponse, SendPromptOptions } from "../types";
 import { logger } from "../logger";
 import { config } from "../config";
 import { ClientDomains, CursorCdpClient, CursorTargetSummary, wait } from "./CursorCdpClient";
@@ -216,10 +216,7 @@ export class CursorAutomationClient {
     }
   }
 
-  async sendPrompt(
-    prompt: string,
-    options?: { preferAttachmentComposer?: boolean; attachmentKind?: "photo" | "document"; attachmentFileName?: string }
-  ): Promise<BridgeResponse> {
+  async sendPrompt(prompt: string, options?: SendPromptOptions): Promise<BridgeResponse> {
     logger.info({ length: prompt.length }, "Prompt relay requested");
 
     try {
@@ -239,24 +236,41 @@ export class CursorAutomationClient {
         }
         const focused = await this.focusChatInput(client, focusOptions);
         if (!focused) {
-          return { delivered: false, responseSnippet: null as string | null };
+          return { delivered: false, responseSnippet: null as string | null, cancelled: false };
         }
 
         const baselineSnippet = await this.readLatestAssistantSnippet(client);
         const injected = await this.injectPromptText(client, prompt);
         if (!injected) {
-          return { delivered: false, responseSnippet: null as string | null };
+          return { delivered: false, responseSnippet: null as string | null, cancelled: false };
         }
 
         await this.cdp.sendShortcut(client, "Enter", "Enter", 13, 0);
-        const responseSnippet = await this.pollLatestAssistantSnippet(
-          client,
-          config.cursorActionTimeoutMs,
+        const maxWaitMs = options?.onProgress ? config.cursorRelayMaxMs : config.cursorActionTimeoutMs;
+        const watchOptions: {
+          maxWaitMs: number;
+          baselineSnippet: string | null;
+          prompt: string;
+          onProgress?: (event: AgentProgressEvent) => void | Promise<void>;
+          signal?: AbortSignal;
+        } = {
+          maxWaitMs,
           baselineSnippet,
           prompt
-        );
-        return { delivered: true, responseSnippet };
+        };
+        if (options?.onProgress) {
+          watchOptions.onProgress = options.onProgress;
+        }
+        if (options?.signal) {
+          watchOptions.signal = options.signal;
+        }
+        const responseSnippet = await this.waitForCurrentTurn(client, watchOptions);
+        return { delivered: true, responseSnippet, cancelled: responseSnippet === "__cancelled__" };
       });
+
+      if (relayResult.cancelled) {
+        return { text: "已取消等待 Cursor 回复。", metadata: { status: "cancelled" } };
+      }
 
       if (!relayResult.delivered) {
         return {
@@ -265,7 +279,7 @@ export class CursorAutomationClient {
         };
       }
 
-      if (relayResult.responseSnippet) {
+      if (relayResult.responseSnippet && relayResult.responseSnippet !== "__cancelled__") {
         return {
           text: relayResult.responseSnippet,
           metadata: { status: "delivered" }
@@ -274,8 +288,8 @@ export class CursorAutomationClient {
 
       return {
         text:
-          "提示词已送达，但还没有捕获到回复。\n" +
-          "如果稍后仍无回复，请发送 /diag 后再重试。",
+          "提示词已送达，但还没有捕获到完整回复。\n" +
+          "任务可能仍在 Cursor 里执行，稍后发送 /last 获取。",
         metadata: { status: "delivered-no-snippet" }
       };
     } catch (error) {
@@ -1222,6 +1236,169 @@ export class CursorAutomationClient {
     return injected === true;
   }
 
+  private async waitForCurrentTurn(
+    client: ClientDomains,
+    options: {
+      maxWaitMs: number;
+      baselineSnippet: string | null;
+      prompt?: string;
+      onProgress?: (event: AgentProgressEvent) => void | Promise<void>;
+      signal?: AbortSignal;
+    }
+  ): Promise<string | null> {
+    const deadline = Date.now() + Math.max(5_000, options.maxWaitMs);
+    let lastStatus = "";
+    let lastMarkdown = "";
+    let stableAt = 0;
+
+    while (Date.now() < deadline) {
+      if (options.signal?.aborted) {
+        return "__cancelled__";
+      }
+      const snapshot = await this.readTurnSnapshot(client);
+      const statusKind = this.progressKind(snapshot.statusText);
+      if (statusKind && statusKind !== lastStatus) {
+        lastStatus = statusKind;
+        if (options.onProgress) {
+          await options.onProgress({
+            phase: statusKind === "thinking" ? "thinking" : statusKind === "waiting" ? "waiting" : "working",
+            text: statusKind === "thinking" ? "思考中" : statusKind === "waiting" ? "等待中" : "执行中"
+          });
+        }
+      }
+
+      const markdown = snapshot.markdown?.trim() ? snapshot.markdown.trim() : "";
+      const isNew =
+        Boolean(markdown) &&
+        markdown !== options.baselineSnippet &&
+        !this.isPromptEcho(markdown, options.prompt ?? "") &&
+        !this.isActivitySnippet(markdown);
+
+      if (isNew) {
+        if (markdown !== lastMarkdown) {
+          lastMarkdown = markdown;
+          stableAt = Date.now();
+        } else {
+          if (stableAt === 0) {
+            stableAt = Date.now();
+          }
+          const ready = !snapshot.generating && Date.now() - stableAt >= 2000;
+          const stuckFallback = snapshot.generating && Date.now() - stableAt >= 25000;
+          if (ready || stuckFallback) {
+            return markdown;
+          }
+        }
+      }
+      await wait(800);
+    }
+
+    return lastMarkdown && lastMarkdown !== options.baselineSnippet ? lastMarkdown : null;
+  }
+
+  private progressKind(statusText: string): "thinking" | "waiting" | "working" | null {
+    const compact = statusText.replace(/\s+/g, " ").trim();
+    if (!compact) {
+      return null;
+    }
+    if (/thought|thinking/i.test(compact)) {
+      return "thinking";
+    }
+    if (/waited|waiting|worked for/i.test(compact)) {
+      return "waiting";
+    }
+    if (/explor|reading|searching|running|edited|called/i.test(compact)) {
+      return "working";
+    }
+    return null;
+  }
+
+  private async readTurnSnapshot(client: ClientDomains): Promise<{
+    generating: boolean;
+    statusText: string;
+    markdown: string;
+  }> {
+    const expression = `
+      (() => {
+        function getNodeText(node) {
+          if (!node) return '';
+          const inner = typeof node.innerText === 'string' ? node.innerText : '';
+          const text = typeof node.textContent === 'string' ? node.textContent : '';
+          return inner && inner.trim().length > 0 ? inner : text;
+        }
+        function sanitize(text) {
+          return String(text || '').replace(/\\r\\n/g, '\\n').trim();
+        }
+        const rows = Array.from(document.querySelectorAll('.virtualized-composer-messages-row'));
+        const items = rows.map((el) => {
+          const inner = el.querySelector('[data-react-transcript-row-kind],[data-message-kind],[data-tool-status]');
+          return {
+            key: String(el.getAttribute('data-find-row-key') || el.getAttribute('data-react-transcript-row-key') || ''),
+            kind: String((inner && inner.getAttribute('data-react-transcript-row-kind')) || ''),
+            messageKind: String((inner && inner.getAttribute('data-message-kind')) || ''),
+            toolStatus: String((inner && inner.getAttribute('data-tool-status')) || ''),
+            pairIndex: String(el.getAttribute('data-pair-index') || ''),
+            text: sanitize(getNodeText(el))
+          };
+        });
+        let lastHuman = -1;
+        for (let i = items.length - 1; i >= 0; i -= 1) {
+          if (/^human:/.test(items[i].key)) {
+            lastHuman = i;
+            break;
+          }
+        }
+        const currentPair = lastHuman >= 0
+          ? items[lastHuman].pairIndex
+          : items.reduce((max, row) => {
+              const n = Number(row.pairIndex);
+              return Number.isFinite(n) && n > max ? n : max;
+            }, -1);
+        const turn = currentPair >= 0
+          ? items.filter((row) => Number(row.pairIndex) === Number(currentPair) || (!row.pairIndex && /^(tail-status|synthetic|turn-actions):/.test(row.key)))
+          : lastHuman >= 0 ? items.slice(lastHuman + 1) : items.slice(-16);
+        const status = [];
+        const markdown = [];
+        for (const row of turn) {
+          const key = row.key;
+          const firstLine = (row.text.split('\\n').find((line) => line.trim()) || '').trim();
+          if (row.kind === 'tailStatus' || /^tail-status:/.test(key)) {
+            if (firstLine) status.push(firstLine.slice(0, 240));
+            continue;
+          }
+          if (row.kind === 'activityGroup' || row.kind === 'activity' || row.messageKind === 'thinking' || row.messageKind === 'tool' || /thinking|activity-group|work-group|tool-placeholder/.test(key)) {
+            if (firstLine) status.push(firstLine.slice(0, 240));
+            continue;
+          }
+          if ((row.kind === 'assistantMarkdown' || /assistant-markdown|assistantMarkdown/.test(key) || row.messageKind === 'assistant') && row.text) {
+            markdown.push(row.text);
+          }
+        }
+        const stop = Array.from(document.querySelectorAll('button,[role="button"]')).some((el) => {
+          const label = String((el.getAttribute('aria-label') || '') + ' ' + (el.textContent || ''));
+          const rect = el.getBoundingClientRect();
+          return rect.width > 4 && rect.height > 4 && /stop generating|停止生成/i.test(label);
+        });
+        const liveTail = items.some((row) => row.kind === 'tailStatus' || /^tail-status:/.test(row.key));
+        const toolLoading = items.some((row) => row.toolStatus === 'loading');
+        const completed = turn.some((row) => /^turn-actions:/.test(row.key) || row.kind === 'turnActions');
+        return {
+          generating: stop || liveTail || toolLoading || !completed,
+          statusText: status.length ? status[status.length - 1] : '',
+          markdown: markdown.join('\\n\\n').slice(0, 24000)
+        };
+      })();
+    `;
+    const result = await this.cdp.evaluateJson<{ generating: boolean; statusText: string; markdown: string }>(
+      client,
+      expression
+    );
+    return {
+      generating: result?.generating === true,
+      statusText: result?.statusText ?? "",
+      markdown: result?.markdown ?? ""
+    };
+  }
+
   private async pollLatestAssistantSnippet(
     client: ClientDomains,
     timeoutMs: number,
@@ -1234,7 +1411,7 @@ export class CursorAutomationClient {
     let changedAtMs: number | null = null;
     while (Date.now() < deadline) {
       const snippet = await this.readLatestAssistantSnippet(client);
-      if (snippet && snippet !== baselineSnippet && !this.isPromptEcho(snippet, promptNorm)) {
+      if (snippet && snippet !== baselineSnippet && !this.isPromptEcho(snippet, promptNorm) && !this.isActivitySnippet(snippet)) {
         if (snippet !== lastValue) {
           changedAtMs = Date.now();
         }
@@ -1246,7 +1423,7 @@ export class CursorAutomationClient {
       }
       await wait(300);
     }
-    return lastValue && lastValue !== baselineSnippet && !this.isPromptEcho(lastValue, promptNorm)
+    return lastValue && lastValue !== baselineSnippet && !this.isPromptEcho(lastValue, promptNorm) && !this.isActivitySnippet(lastValue)
       ? lastValue
       : null;
   }
@@ -1261,6 +1438,21 @@ export class CursorAutomationClient {
     }
     const firstLine = value.split("\n")[0]?.trim() ?? "";
     return firstLine === prompt && value.length <= prompt.length + 24;
+  }
+
+  private isActivitySnippet(snippet: string): boolean {
+    const value = snippet.trim();
+    if (!value) {
+      return true;
+    }
+    const compact = value.replace(/\s+/g, " ");
+    if (compact.length <= 120 && /^(worked for|thought|thinking|just now|generating|cursor grok|exploring|explored|reading|searching|running|edited|called|listed|planning|using|looking|considering|reviewed|scanned|grepping)/i.test(compact)) {
+      return true;
+    }
+    if (/^\d+\s+files?$/i.test(compact) || /^exploring\s+\d+(\s+files?)?$/i.test(compact)) {
+      return true;
+    }
+    return compact.length <= 80 && /exploring|files?|tool call|running command/i.test(compact) && !/[。！？.!?]$/.test(compact);
   }
 
   private async readLatestAssistantSnippet(client: ClientDomains): Promise<string | null> {
@@ -1305,7 +1497,20 @@ export class CursorAutomationClient {
         }
 
         function isStatusChrome(text) {
-          return /^(worked for|thought|thinking|just now|generating|cursor grok)/i.test(text.trim());
+          const compact = String(text || '').replace(/\\s+/g, ' ').trim();
+          return /^(worked for|thought|thinking|just now|generating|cursor grok|exploring|reading|searching|running|edited|called|listed|planning|using|looking|considering|reviewed|scanned|grepping)/i.test(compact)
+            || /^\\d+\\s+files?$/i.test(compact)
+            || /^exploring\\s+\\d+/i.test(compact);
+        }
+
+        function isActivityRow(el) {
+          if (!el) return false;
+          const kind = String(el.getAttribute('data-react-transcript-row-kind') || '').toLowerCase();
+          if (kind && kind !== 'assistantmarkdown' && kind !== 'markdown') return true;
+          const key = String(el.getAttribute('data-find-row-key') || el.getAttribute('data-react-transcript-row-key') || '');
+          if (/work-group|activity-group|thinking|tool|turn-actions/i.test(key)) return true;
+          const cls = String(el.className || '');
+          return /activity|thinking|tool-call|work-group/.test(cls);
         }
 
         function pickText(el) {
@@ -1313,12 +1518,20 @@ export class CursorAutomationClient {
           return sanitize(getNodeText(md || el));
         }
 
+        const markdownRows = Array.from(document.querySelectorAll('[data-react-transcript-row-kind="assistantMarkdown"], .agent-transcript-row-markdown'));
+        for (let i = markdownRows.length - 1; i >= 0; i -= 1) {
+          const el = markdownRows[i];
+          if (isHuman(el) || isActivityRow(el)) continue;
+          const txt = pickText(el);
+          if (txt && !isStatusChrome(txt)) return txt.slice(0, 3200);
+        }
+
         const assistantHosts = Array.from(document.querySelectorAll(
-          '[data-message-kind="assistant"], [data-message-role="ai"], [data-react-transcript-row-kind="assistantMarkdown"]'
+          '[data-message-kind="assistant"], [data-message-role="ai"]'
         ));
         for (let i = assistantHosts.length - 1; i >= 0; i -= 1) {
           const el = assistantHosts[i];
-          if (isHuman(el)) continue;
+          if (isHuman(el) || isActivityRow(el)) continue;
           const txt = pickText(el);
           if (txt && !isStatusChrome(txt)) return txt.slice(0, 3200);
         }
@@ -1327,7 +1540,7 @@ export class CursorAutomationClient {
         if (configured) {
           const nodes = Array.from(document.querySelectorAll(configured));
           for (let i = nodes.length - 1; i >= 0; i -= 1) {
-            if (isHuman(nodes[i])) continue;
+            if (isHuman(nodes[i]) || isActivityRow(nodes[i])) continue;
             const txt = sanitize(getNodeText(nodes[i]));
             if (txt && !isStatusChrome(txt)) return txt.slice(0, 3200);
           }
@@ -1342,7 +1555,7 @@ export class CursorAutomationClient {
         for (const sel of preferredSelectors) {
           const nodes = Array.from(document.querySelectorAll(sel));
           for (let i = nodes.length - 1; i >= 0; i -= 1) {
-            if (isHuman(nodes[i])) continue;
+            if (isHuman(nodes[i]) || isActivityRow(nodes[i])) continue;
             const txt = sanitize(getNodeText(nodes[i]));
             if (txt && !isStatusChrome(txt)) return txt.slice(0, 3200);
           }

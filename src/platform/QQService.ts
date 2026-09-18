@@ -1,6 +1,7 @@
 import { createPrivateKey, createPublicKey, sign, verify } from "node:crypto";
 import { config } from "../config";
 import { logger } from "../logger";
+import { AgentProgressEvent } from "../types";
 import { CommandRouter } from "./CommandRouter";
 import { notificationHub } from "./NotificationHub";
 import { HttpResult } from "./HttpResult";
@@ -219,14 +220,8 @@ export class QQService {
     return /^\/(resume|choose)(\s|$)/i.test(value);
   }
 
-  private isPendingCapture(text: string): boolean {
-    const value = text.toLowerCase();
-    return (
-      text.includes("还没有捕获到回复") ||
-      text.includes("回复超时") ||
-      value.includes("response capture is pending") ||
-      value.includes("pending or unavailable")
-    );
+  private formatProgress(event: AgentProgressEvent): string {
+    return event.text;
   }
 
   private async relayAndReply(
@@ -240,56 +235,29 @@ export class QQService {
     const send = (content: string) =>
       kind === "private" ? this.sendPrivate(targetId, content, msgId) : this.sendGroup(targetId, content, msgId);
 
-    if (this.isRelayText(text)) {
-      await send("已转发给 Cursor，正在等待回复…");
+    if (!this.isRelayText(text)) {
+      const reply = await this.router.handle(channelId, text);
+      await send(reply);
+      return;
     }
 
-    const timeoutMs = Math.max(config.cursorActionTimeoutMs + 15_000, 45_000);
-    const reply = await this.withTimeout(
-      this.router.handle(channelId, text),
-      timeoutMs,
-      "Cursor 回复超时。可稍后发送 /last 获取刚才的助手回复。"
-    );
-    await send(reply);
-
-    if (this.isRelayText(text) && this.isPendingCapture(reply)) {
-      await this.sendDelayedFollowup(channelId, send, reply);
-    }
-  }
-
-  private async withTimeout(task: Promise<string>, timeoutMs: number, timeoutMessage: string): Promise<string> {
-    let timer: NodeJS.Timeout | undefined;
-    const timeout = new Promise<string>((resolve) => {
-      timer = setTimeout(() => resolve(timeoutMessage), timeoutMs);
+    await send("已转发给 Cursor，正在同步完整回复…");
+    let lastProgress = "";
+    let lastProgressAt = 0;
+    const reply = await this.router.handle(channelId, text, {
+      onProgress: async (event) => {
+        const formatted = this.formatProgress(event);
+        const now = Date.now();
+        if (formatted === lastProgress || now - lastProgressAt < 8000) {
+          return;
+        }
+        lastProgress = formatted;
+        lastProgressAt = now;
+        await send(formatted);
+      }
     });
-    try {
-      return await Promise.race([task, timeout]);
-    } finally {
-      if (timer) {
-        clearTimeout(timer);
-      }
-    }
-  }
-
-  private async sendDelayedFollowup(
-    channelId: string,
-    send: (content: string) => Promise<void>,
-    previous: string,
-    maxWaitMs = 60_000
-  ): Promise<void> {
-    const started = Date.now();
-    while (Date.now() - started < maxWaitMs) {
-      await new Promise((resolve) => setTimeout(resolve, 2500));
-      const latest = await this.router.handle(channelId, "/last");
-      if (
-        latest &&
-        latest !== previous &&
-        !this.isPendingCapture(latest) &&
-        !latest.includes("还没有助手回复")
-      ) {
-        await send(latest);
-        return;
-      }
+    if (reply && reply !== lastProgress) {
+      await send(reply);
     }
   }
 

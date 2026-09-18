@@ -1,5 +1,5 @@
 import { BridgeService } from "../bridge/BridgeService";
-import { BridgeMode } from "../types";
+import { BridgeMode, SendPromptOptions } from "../types";
 import { ChatStateStore } from "../telegram/ChatStateStore";
 import { TextSecurityGuard } from "../security/TextSecurityGuard";
 import { config } from "../config";
@@ -20,7 +20,7 @@ export class CommandRouter {
   private readonly progressByChannel = new Map<string, ProgressState>();
   private nextRequestId = 1;
 
-  async handle(channelId: string, text: string): Promise<string> {
+  async handle(channelId: string, text: string, options?: SendPromptOptions): Promise<string> {
     const value = text.trim();
     if (!value) {
       return "消息为空。";
@@ -111,23 +111,23 @@ export class CommandRouter {
     if (value.startsWith("/resume")) {
       const arg = value.replace("/resume", "").trim();
       if (arg) {
-        return await this.relayPrompt(channelId, arg);
+        return await this.relayPrompt(channelId, arg, options);
       }
       const previous = this.lastPromptByChannel.get(channelId)?.prompt
         ?? this.stateStore.getLastPrompt(this.channelKeyToNumber(channelId))?.prompt;
       if (!previous) {
         return "没有找到上一次任务。";
       }
-      return await this.relayPrompt(channelId, `继续上一次任务。\n原始请求：${previous}`);
+      return await this.relayPrompt(channelId, `继续上一次任务。\n原始请求：${previous}`, options);
     }
     if (value.startsWith("/choose")) {
-      return await this.handleChoose(channelId, value);
+      return await this.handleChoose(channelId, value, options);
     }
 
-    return TextSecurityGuard.sanitizeOutbound(await this.relayPrompt(channelId, value));
+    return TextSecurityGuard.sanitizeOutbound(await this.relayPrompt(channelId, value, options));
   }
 
-  private async handleChoose(channelId: string, text: string): Promise<string> {
+  private async handleChoose(channelId: string, text: string, options?: SendPromptOptions): Promise<string> {
     const latest = (await this.bridge.latestResponse())
       ?? this.stateStore.getLastDelivered(this.channelKeyToNumber(channelId))?.text;
     if (!latest) {
@@ -152,10 +152,10 @@ export class CommandRouter {
         "- `/choose multi B,D:同时加上日志`"
       ].join("\n");
     }
-    return await this.relayPrompt(channelId, relayPrompt);
+    return await this.relayPrompt(channelId, relayPrompt, options);
   }
 
-  private async relayPrompt(channelId: string, prompt: string): Promise<string> {
+  private async relayPrompt(channelId: string, prompt: string, options?: SendPromptOptions): Promise<string> {
     const policy = TextSecurityGuard.evaluatePrompt(prompt);
     if (!policy.allowed) {
       return policy.reason ?? "已被安全策略拦截。";
@@ -167,7 +167,22 @@ export class CommandRouter {
     this.activeRequestByChannel.set(channelId, requestId);
     this.progressByChannel.set(channelId, { requestId, phase: "running", startedAt, updatedAt: startedAt });
     try {
-      const response = await this.bridge.relayPrompt(prompt);
+      const relayOptions: SendPromptOptions = {};
+      if (options?.onProgress) {
+        relayOptions.onProgress = async (event) => {
+          this.progressByChannel.set(channelId, {
+            requestId,
+            phase: event.phase,
+            startedAt,
+            updatedAt: Date.now()
+          });
+          await options.onProgress?.(event);
+        };
+      }
+      if (options?.signal) {
+        relayOptions.signal = options.signal;
+      }
+      const response = await this.bridge.relayPrompt(prompt, relayOptions);
       this.stateStore.recordDelivered(this.channelKeyToNumber(channelId), response, requestId, Date.now());
       this.progressByChannel.delete(channelId);
       this.activeRequestByChannel.delete(channelId);

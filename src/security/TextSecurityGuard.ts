@@ -12,22 +12,22 @@ export class TextSecurityGuard {
 
   private static readonly REDACTION_RULES: Array<{ pattern: RegExp; replacement: string }> = [
     {
-      // Generic long bearer/API token style strings
-      pattern: /\b([A-Za-z0-9_-]{16,})\b/g,
+      pattern: /\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g,
       replacement: "[REDACTED_TOKEN]"
     },
     {
-      // cookie-like key/value snippets
+      pattern: /\b(sk-|ghp_|gho_|github_pat_|xox[baprs]-|AIza)[A-Za-z0-9_-]{8,}\b/g,
+      replacement: "[REDACTED_TOKEN]"
+    },
+    {
       pattern: /\b(cookie|set-cookie)\s*[:=]\s*[^;\n]+/gi,
       replacement: "$1=[REDACTED]"
     },
     {
-      // assignment style secrets
       pattern: /\b([A-Z0-9_]{2,})\s*=\s*([^\s"'`]{6,})/g,
       replacement: "$1=[REDACTED]"
     },
     {
-      // auth header
       pattern: /\b(authorization\s*:\s*bearer)\s+[^\s]+/gi,
       replacement: "$1 [REDACTED]"
     }

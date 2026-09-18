@@ -1,4 +1,4 @@
-import { BridgeMode, BridgeResponse } from "../types";
+import { BridgeMode, BridgeResponse, SendPromptOptions } from "../types";
 import { logger } from "../logger";
 import { config } from "../config";
 import { ClientDomains, CdpTargetSummary, wait } from "../cdp/BaseCdpClient";
@@ -244,7 +244,7 @@ export class VscodeAutomationClient {
     }
   }
 
-  async sendPrompt(prompt: string): Promise<BridgeResponse> {
+  async sendPrompt(prompt: string, _options?: SendPromptOptions): Promise<BridgeResponse> {
     logger.info({ length: prompt.length }, "VS Code prompt relay requested");
 
     try {
