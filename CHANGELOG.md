@@ -11,13 +11,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Official WeCom (企业微信), WeChat Official Account, and QQ bot adapters for the same command surface as Telegram/Feishu (`/help`, `/mode`, `/choose`, prompt relay).
 - IM notification hub so CDP preflight alerts fan out to every enabled adapter, not only Telegram.
 - `/choose` support on the shared CommandRouter used by non-Telegram adapters.
+- QQ C2C streaming (`/v2/users/{openid}/stream_messages`) that replace-updates one bubble with growing Cursor `assistant-markdown`.
+- Full-turn Composer capture: wait for `tail-status` / tool `loading` to clear and `turn-actions` to appear, then join every assistant markdown row in the pair.
+- `CURSOR_RELAY_MAX_MS` (default 1 hour) for long agent turns when an IM adapter supplies `onProgress`.
 
 ### Changed
 - Renamed the project from Gantry to Courier.
 - `TELEGRAM_BOT_TOKEN` is optional so a machine can run WeCom/WeChat/QQ/HTTP only.
+- Shared CommandRouter replies are Chinese; `/targets` lists window titles only.
+- QQ group finals send custom Markdown (`msg_type=2`); C2C prefers streamed Markdown and falls back to text.
 - Re-licensed Gantry from AGPL-3.0 to MIT.
 - Standardized attribution: Copyright holder is Grasp Visual LLC, created by Alan Perez.
 - Removed landing-page and enterprise marketing references from repository docs/metadata.
+
+### Fixed
+- Outbound redaction no longer treats ordinary window titles and workbench paths as tokens (JWT / `sk-` / assignment / bearer only).
+- Multi-window Cursor on one CDP port is pinned by title/`/target n` instead of the shared `workbench.html` URL.
 
 ## [0.1.0] - 2026-03-12
 

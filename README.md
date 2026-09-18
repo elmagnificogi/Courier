@@ -62,15 +62,19 @@
 
 Courier 通过 **Chrome DevTools Protocol**（就是 Chrome DevTools 用的那套协议）连接 IDE。Cursor、Windsurf、VS Code 用 `--remote-debugging-port` 启动后，Courier 会按 best-effort 去操作聊天面板。
 
+Cursor 的回复**不是**走官方 Agent SDK，也不是读内部 SQLite。默认路径是 CDP 抓 Composer 会话 DOM：`assistant-markdown` 是正文，`activity-group` / `tool-placeholder` 是过程，`tail-status:current` 表示还在生成，`turn-actions` 出现后视为本轮结束。结论文本和过程中的第一句话用同一套 class，必须等整轮完成再定稿。
+
 ---
 
 ## 功能
 
 > **预览版（`v0.x`）**
-> - Telegram 的界面最完整（行内按钮、图片/文件附件）。企业微信 / 微信公众号 / QQ 走同一套文本命令（`/help`、`/mode`、`/choose`、直接发任务）。
+> - Telegram 的界面最完整（行内按钮、图片/文件附件）。企业微信 / 微信公众号 / QQ 走同一套文本命令（`/help`、`/mode`、`/choose`、直接发任务）。共享命令回复为中文。
 > - IDE 必须带 `--remote-debugging-port` 启动，桥接才能连上。
 > - 远程桌面仍应作为兜底：IDE 状态、提问、计划不一定总能被检测到。
 > - Cursor 选择器已对准 `.tiptap.ProseMirror` 输入框和助手 Markdown 回复；只有本地构建不一致时才改 `.env`。
+> - 发给 Cursor 的长任务会等到本轮 `turn-actions` 出现（默认最长 `CURSOR_RELAY_MAX_MS=1h`），再把这一轮全部 `assistant-markdown` 拼起来回 IM，而不是只截第一句。
+> - QQ 私聊会把这段正文刷进**同一条官方流式消息**（Markdown 子集）；群聊没有流式接口，终稿单独发 Markdown。
 > - Cursor 与 Windsurf 的 `/start` 快捷操作：新对话 | 上一条 · Ask 模式 | Code 模式 · Plan 模式 | Context % · 重启 · 帮助。
 > - VS Code 的 `/model`、`/models` 会从当前可见的模型控件做 best-effort 探测/列表；结果取决于本机聊天 UI 状态。
 > - `/restart` 会按平台启动脚本重启桥接；起来后会通知「Bridge restarted and is now online.」
@@ -81,7 +85,7 @@ Courier 通过 **Chrome DevTools Protocol**（就是 Chrome DevTools 用的那�
 
 | 功能 | Cursor | Windsurf | VS Code |
 |---|---|---|---|
-| 提示词转发 + 捕获回复 | best-effort | best-effort | best-effort |
+| 提示词转发 + 捕获整轮回复 | best-effort | best-effort | best-effort |
 | 模式切换 | official（`ask/code/plan/debug`） | official（`ask/code/plan`，无 `debug`） | best-effort（`ask/code/plan`，无 `debug`） |
 | 模型探测 + 切换 | best-effort | best-effort | best-effort（从 DOM 探测/列出/切换，失败会明确标 unverified） |
 | 新对话 / 会话管理 | official + best-effort | official + best-effort | best-effort（失败会明确标 unverified） |
@@ -97,7 +101,7 @@ Courier 通过 **Chrome DevTools Protocol**（就是 Chrome DevTools 用的那�
 | **Telegram（主界面）** | 完整命令、行内按钮/快捷操作、图片/文件附件、重启通知、自动提问提醒（不一定可靠） |
 | **企业微信** | 官方回调 + 应用消息接口。文本命令、`/choose`、白名单、启动告警。图片请用 `/attach` 本地路径。个人微信可通过「微信插件」给该应用发消息。 |
 | **微信公众号** | 官方回调 + 客服消息。文本命令。用户需先给公众号发过消息（48 小时窗口）。 |
-| **QQ 机器人** | 默认官方 WebSocket（本机出站，不需要公网）。也可改 Webhook。单聊与群聊 @。文本命令、`/choose`。 |
+| **QQ 机器人** | 默认官方 WebSocket（本机出站，不需要公网）。也可改 Webhook。单聊流式刷新 Cursor 正文（Markdown 子集）；群聊发 Markdown 终稿。`/whoami` 取 openid。`/choose`、`/target`。 |
 | **Discord** | 仅文本回复（无按钮、无重启通知、附件有限） |
 | **HTTP API** | OpenAI 兼容的 `POST /v1/chat/completions`（best-effort） |
 | **飞书 / Lark** | 仅文本命令（无按钮/附件） |
@@ -118,7 +122,7 @@ Courier 通过 **Chrome DevTools Protocol**（就是 Chrome DevTools 用的那�
 | 层 | 保护 |
 |---|---|
 | **入站** | 拦截提示词外泄（cookie、token、环境变量转储、密钥） |
-| **出站** | 脱敏 API key、Bearer token、cookie 值和赋值形式的机密 |
+| **出站** | 脱敏 JWT、`sk-`/`ghp_` 等密钥前缀、Bearer token、cookie 和赋值形式的机密；窗口标题、普通路径不会被当成 token |
 | **访问** | 按平台白名单（Telegram ID、Discord ID、邮件发件人、飞书 open ID、企业微信 UserId、微信/QQ openid） |
 | **网络** | 只在本地跑 — 无云端、无遥测、不回传 |
 
@@ -178,7 +182,7 @@ npm run dev
 
 ## 国内 IM 接入（企业微信 / 微信 / QQ）
 
-这些适配器只走**官方 API**。回调需要一条指向本机的公网 URL（cpolar / ngrok / frp / 反向代理）。
+这些适配器只走**官方 API**。企业微信和微信公众号的回调需要一条指向本机的公网 URL（cpolar / ngrok / frp / 反向代理）。**QQ 默认走 WebSocket，不需要公网。**
 
 ### 企业微信（推荐）
 
@@ -239,6 +243,18 @@ QQ_ALLOWED_GROUP_OPEN_IDS=...     # 可选，群 openid 白名单
 
 **怎么拿到 openid：** QQ 后台不会显示这个值，也不是 QQ 号。用你的 QQ 私聊机器人，发送 `/whoami`（`/id`、`/openid` 也可以）。机器人会把 `user_openid` 回给你，抄进 `QQ_ALLOWED_OPEN_IDS` 后重启。Courier 日志里同样会打出 `userOpenId`。群里发 `/whoami` 得到的是 `group_openid`（给 `QQ_ALLOWED_GROUP_OPEN_IDS`），和单聊 openid 不是同一个。
 
+### QQ 如何回传 Cursor 输出
+
+1. 私聊发普通任务（不以 `/` 开头，或 `/resume`、`/choose`）后，Courier 注入当前固定的 Cursor 窗口。
+2. CDP 轮询 Composer 行：过程行（思考 / Exploring / 工具）只用来判断还在跑；正文取本轮所有 `assistant-markdown`。
+3. 看到 `tail-status:current` 或工具 `data-tool-status="loading"` 就继续等；`turn-actions`（Copy / Retry / Just now）出现后视为结束。
+4. **单聊**调用 `POST /v2/users/{openid}/stream_messages`，用 `replace` 把不断变长的正文写进同一条消息，结束时 `input_state=10`。优先 Markdown，失败则退回纯文本，再失败则拆成普通消息。
+5. **群聊**官方不支持流式参数，过程仍是短文本，终稿发 `msg_type=2` Markdown。
+
+QQ Markdown 是子集（标题、加粗、列表、代码块、链接），对不上 Cursor 工作台的语法高亮、diff、工具卡片、思考折叠。单条流式消息大约 4000 字，超出部分会另发一条。
+
+开了两个 Cursor 窗口时，它们通常是**同一个进程的两个页面**（CDP 端口相同）。`/targets` 只列出窗口标题；用 `/target 2` 固定当前工程，避免消息进错窗口。真正并行两套 IDE 需要两份 `--user-data-dir`、两个调试端口、两套 Courier。
+
 ---
 
 ## 命令
@@ -263,8 +279,9 @@ QQ_ALLOWED_GROUP_OPEN_IDS=...     # 可选，群 openid 白名单
 | `/context` | Context 窗口用量 |
 | `/usage` | 用量/账单状态 |
 | `/progress` | 当前请求状态 + 已用时间 |
-| `/targets` 或 `/chats` | 列出可用 IDE 目标 |
-| `/target <n>` 或 `/target auto` | 选指定目标，或自动选择 |
+| `/targets` 或 `/chats` | 列出可用 IDE 窗口（只显示标题，不含 URL） |
+| `/target <n>` 或 `/target auto` | 固定第 n 个窗口，或改回自动选择 |
+| `/whoami` | QQ 场景下查看 `user_openid` / 群 `group_openid` |
 | `/history [n\|clear]` | 最近回复，或清空历史 |
 | `/cancel [all]` | 停止后续轮询 |
 
@@ -428,7 +445,8 @@ $env:DOTENV_CONFIG_PATH=".env.windsurf"; npx tsx src/index.ts
 | `CURSOR_RESPONSE_SELECTOR` | （内置） | 回复容器 CSS 选择器覆盖 |
 | `CURSOR_CONTEXT_SELECTOR` | （内置） | Context 指示器 CSS 选择器覆盖 |
 | `CURSOR_MODEL_SELECTOR` | `[class*="composer-unified-dropdown-model"]` | 模型下拉 CSS 选择器 |
-| `CURSOR_ACTION_TIMEOUT_MS` | `30000` | 操作超时 |
+| `CURSOR_ACTION_TIMEOUT_MS` | `30000` | 短操作超时（聚焦、注入、无进度回调时的抓取） |
+| `CURSOR_RELAY_MAX_MS` | `3600000` | 带进度回调时等待 Cursor 整轮结束的上限（默认 1 小时） |
 | `CURSOR_SQLITE_PATH` | （自动探测） | 状态数据库路径 |
 | `CURSOR_APP_EXE` | `Cursor` | 可执行文件提示 |
 | `CURSOR_CONTEXT_REGION` | — | OCR 裁剪区域：`x,y,width,height` |
@@ -546,6 +564,8 @@ $env:DOTENV_CONFIG_PATH=".env.windsurf"; npx tsx src/index.ts
 | `QQ_ALLOWED_GROUP_OPEN_IDS` | — | 群 openid 白名单（空则允许全部群） |
 | `QQ_API_BASE` | `https://api.bot.qq.com` | OpenAPI 根地址 |
 | `QQ_EVENT_MODE` | `websocket` | `websocket` 本机出站无需公网；`webhook` 需公网回调；`both` 两种都开 |
+
+单聊任务默认走官方流式消息刷新 Cursor 正文，无需额外开关。群聊仍为普通 Markdown 终稿。
 
 </details>
 

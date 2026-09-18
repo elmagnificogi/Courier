@@ -1289,9 +1289,8 @@ export class CursorAutomationClient {
           if (stableAt === 0) {
             stableAt = Date.now();
           }
-          const ready = !snapshot.generating && Date.now() - stableAt >= 2000;
-          const stuckFallback = snapshot.generating && Date.now() - stableAt >= 25000;
-          if (ready || stuckFallback) {
+          if (!snapshot.generating && Date.now() - stableAt >= 2000) {
+            logger.info({ chars: markdown.length }, "Cursor turn captured after generation settled");
             return markdown;
           }
         }
