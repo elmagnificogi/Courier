@@ -143,7 +143,7 @@ export class WeComService {
       await this.sendText(fromUser, reply);
     } catch (error) {
       logger.warn({ error, fromUser }, "WeCom command failed");
-      await this.sendText(fromUser, "请求失败，请查看 Gantry 日志。");
+      await this.sendText(fromUser, "请求失败，请查看 Courier 日志。");
     }
   }
 

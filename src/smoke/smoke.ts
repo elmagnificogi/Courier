@@ -31,7 +31,7 @@ function testTextSecurityGuard(): void {
 }
 
 function testChatStateStorePersistence(): void {
-  const baseDir = mkdtempSync(join(tmpdir(), "gantry-smoke-"));
+  const baseDir = mkdtempSync(join(tmpdir(), "courier-smoke-"));
   const statePath = join(baseDir, "chat-state.json");
   const chatId = 42;
 

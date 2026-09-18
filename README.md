@@ -1,8 +1,8 @@
 <div align="center">
 
-# Gantry
+# Courier
 
-**AI IDE 被锁在桌面上。Gantry 把它接到你的聊天软件里。**
+**AI IDE 被锁在桌面上。Courier 把它接到你的聊天软件里。**
 
 通过 Telegram、企业微信、微信公众号、QQ、Discord、邮件或 HTTP 客户端，远程控制本机的 Cursor、Windsurf、VS Code。
 开源的本地 IDE 桥接服务，带自愈诊断。
@@ -17,11 +17,11 @@
 ---
 
 
-## 为什么用 Gantry？
+## 为什么用 Courier？
 
 - **随时随地干活** — 从 Telegram、企业微信、微信公众号、QQ、Discord，或 CI 里的 cURL，把任务发给本机 Cursor / Windsurf / VS Code。不需要 VNC、RDP、投屏。
 - **多 IDE、多平台** — 一套桥接对应一个 IDE。可以并行跑多套实例，各自独立 bot。Discord、飞书、企业微信、微信、QQ、邮件、HTTP API 可以同时开。
-- **自愈诊断** — IDE 更新改掉 CSS 选择器时，Gantry 启动时会探测，从当前 DOM 里找出候选，并通过已启用的 IM 发来可执行的修复说明。
+- **自愈诊断** — IDE 更新改掉 CSS 选择器时，Courier 启动时会探测，从当前 DOM 里找出候选，并通过已启用的 IM 发来可执行的修复说明。
 - **安全优先，代码可审计** — 入站拦截提示词外泄；出站回复会脱敏 token、密钥和机密。整套护栏开源，每一行都能看。
 
 ---
@@ -60,7 +60,7 @@
                         (CDP :9224)
 ```
 
-Gantry 通过 **Chrome DevTools Protocol**（就是 Chrome DevTools 用的那套协议）连接 IDE。Cursor、Windsurf、VS Code 用 `--remote-debugging-port` 启动后，Gantry 会按 best-effort 去操作聊天面板。
+Courier 通过 **Chrome DevTools Protocol**（就是 Chrome DevTools 用的那套协议）连接 IDE。Cursor、Windsurf、VS Code 用 `--remote-debugging-port` 启动后，Courier 会按 best-effort 去操作聊天面板。
 
 ---
 
@@ -163,7 +163,7 @@ TELEGRAM_ALLOWED_USER_IDS=12345   # 你的 Telegram 用户 ID
 "%LOCALAPPDATA%\Programs\Microsoft VS Code\Code.exe" --remote-debugging-port=9224
 ```
 
-### 4. 启动 Gantry
+### 4. 启动 Courier
 
 ```bash
 npm install
@@ -219,7 +219,7 @@ WECHAT_ALLOWED_OPEN_IDS=oXXXX     # 留空则允许所有关注者
 
 ### QQ 官方机器人
 
-默认走 **WebSocket 长连接**：电脑能访问外网即可，Gantry 主动连 QQ 网关收消息，**不需要公网 IP、域名或反代**。
+默认走 **WebSocket 长连接**：电脑能访问外网即可，Courier 主动连 QQ 网关收消息，**不需要公网 IP、域名或反代**。
 
 1. 在 [QQ 开放平台](https://q.qq.com) 创建机器人，拿到 AppID / AppSecret。
 2. 开发设置里把事件接收方式选成 **WebSocket**（不要填 Webhook 回调地址，两者通常互斥）。
@@ -237,7 +237,7 @@ QQ_ALLOWED_GROUP_OPEN_IDS=...     # 可选，群 openid 白名单
 
 只有在你已经有公网 HTTPS 时，才用 Webhook：`QQ_EVENT_MODE=webhook`，回调 `https://<公网域名>/platform/qq/events`（端口限 80/443/8080/8443）。
 
-**怎么拿到 openid：** QQ 后台不会显示这个值，也不是 QQ 号。用你的 QQ 私聊机器人，发送 `/whoami`（`/id`、`/openid` 也可以）。机器人会把 `user_openid` 回给你，抄进 `QQ_ALLOWED_OPEN_IDS` 后重启。Gantry 日志里同样会打出 `userOpenId`。群里发 `/whoami` 得到的是 `group_openid`（给 `QQ_ALLOWED_GROUP_OPEN_IDS`），和单聊 openid 不是同一个。
+**怎么拿到 openid：** QQ 后台不会显示这个值，也不是 QQ 号。用你的 QQ 私聊机器人，发送 `/whoami`（`/id`、`/openid` 也可以）。机器人会把 `user_openid` 回给你，抄进 `QQ_ALLOWED_OPEN_IDS` 后重启。Courier 日志里同样会打出 `userOpenId`。群里发 `/whoami` 得到的是 `group_openid`（给 `QQ_ALLOWED_GROUP_OPEN_IDS`），和单聊 openid 不是同一个。
 
 ---
 
@@ -284,7 +284,7 @@ QQ_ALLOWED_GROUP_OPEN_IDS=...     # 可选，群 openid 白名单
 
 ### 选择题（问题路由）
 
-助手提问时，Gantry 会尽量发一条带快捷选项的提醒（不一定可靠，可能误报，重要操作请用远程桌面核对）：
+助手提问时，Courier 会尽量发一条带快捷选项的提醒（不一定可靠，可能误报，重要操作请用远程桌面核对）：
 
 ```
 /choose A                         # 选 A
@@ -306,7 +306,7 @@ QQ_ALLOWED_GROUP_OPEN_IDS=...     # 可选，群 openid 白名单
 
 ### 模式映射
 
-| Gantry 模式 | Cursor | Windsurf | VS Code |
+| Courier 模式 | Cursor | Windsurf | VS Code |
 |---|---|---|---|
 | `ask` | official（`Ask`） | official（`Chat`） | best-effort（`Ask`） |
 | `code` | official（`Agent`） | official（`Write`） | best-effort（`Agent`） |
@@ -326,7 +326,7 @@ QQ_ALLOWED_GROUP_OPEN_IDS=...     # 可选，群 openid 白名单
 
 ## 自愈告警
 
-IDE 更新改了 DOM 结构时，Gantry 会马上抓住：
+IDE 更新改了 DOM 结构时，Courier 会马上抓住：
 （告警有时是误报，发一条斜杠命令即可核对）
 
 ```

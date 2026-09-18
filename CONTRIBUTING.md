@@ -1,6 +1,6 @@
-# Contributing to Gantry
+# Contributing to Courier
 
-Thanks for your interest in contributing to Gantry. This document covers the basics.
+Thanks for your interest in contributing to Courier. This document covers the basics.
 
 ## Getting Started
 

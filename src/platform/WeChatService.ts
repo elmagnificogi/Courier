@@ -143,7 +143,7 @@ export class WeChatService {
       await this.sendText(fromUser, reply);
     } catch (error) {
       logger.warn({ error, fromUser }, "WeChat command failed");
-      await this.sendText(fromUser, "请求失败，请查看 Gantry 日志。");
+      await this.sendText(fromUser, "请求失败，请查看 Courier 日志。");
     }
   }
 

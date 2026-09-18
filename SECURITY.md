@@ -17,4 +17,4 @@ Do not publicly disclose vulnerabilities until a fix is available and coordinate
 
 ## Scope
 
-This policy covers the Gantry codebase, including platform adapters and security guardrails.
+This policy covers the Courier codebase, including platform adapters and security guardrails.

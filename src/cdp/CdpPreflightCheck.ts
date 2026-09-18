@@ -666,7 +666,7 @@ export async function runStartupPreflightCheck(
     logger.warn({ error }, "CDP preflight check failed unexpectedly — bridge will attempt to run anyway");
     if (notifyUsers) {
       try {
-        await notifyUsers("CDP 预检意外失败，请查看 Gantry 日志。");
+        await notifyUsers("CDP 预检意外失败，请查看 Courier 日志。");
       } catch { /* best-effort */ }
     }
     return false;

@@ -1,7 +1,7 @@
 {
-  "name": "gantry",
+  "name": "courier",
   "version": "0.1.0",
-  "description": "Gantry — local multi-platform bridge for Cursor, Windsurf, and VS Code control via Telegram, WeCom, WeChat, QQ, Discord, Email, Feishu, and HTTP API.",
+  "description": "Courier — local multi-platform bridge for Cursor, Windsurf, and VS Code control via Telegram, WeCom, WeChat, QQ, Discord, Email, Feishu, and HTTP API.",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -15,7 +15,7 @@
     "verify:release": "npm run verify && npm run test:smoke && npm run scan:secrets"
   },
   "keywords": [
-    "gantry",
+    "courier",
     "cursor",
     "windsurf",
     "ide",
@@ -34,10 +34,10 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/uhaop/Gantry.git"
+    "url": "https://github.com/elmagnificogi/Courier.git"
   },
   "bugs": {
-    "url": "https://github.com/uhaop/Gantry/issues"
+    "url": "https://github.com/elmagnificogi/Courier/issues"
   },
   "overrides": {
     "undici": "^6.24.0",

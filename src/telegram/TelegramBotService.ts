@@ -73,7 +73,7 @@ export class TelegramBotService {
       } catch (error) {
         logger.error({ error }, "Failed to handle Telegram message");
         if (ctx.chat?.id) {
-          await this.bot.api.sendMessage(ctx.chat.id, "请求失败，请查看 Gantry 日志。");
+          await this.bot.api.sendMessage(ctx.chat.id, "请求失败，请查看 Courier 日志。");
         }
       }
     });
@@ -86,7 +86,7 @@ export class TelegramBotService {
       } catch (error) {
         logger.error({ error }, "Failed to handle Telegram callback");
         if (ctx.callbackQuery?.message?.chat.id) {
-          await this.sendText(ctx.callbackQuery.message.chat.id, "操作失败，请查看 Gantry 日志。");
+          await this.sendText(ctx.callbackQuery.message.chat.id, "操作失败，请查看 Courier 日志。");
         }
       }
     });
@@ -384,7 +384,7 @@ export class TelegramBotService {
         ? "- VS Code mode/new-chat only report success when confirmed; otherwise they return explicit unverified/failed status."
         : null;
     return [
-      `# Gantry (${ide})`,
+      `# Courier (${ide})`,
       "",
       "## Quick Actions",
       `- \`/newchat\` start a fresh ${ide} chat`,
@@ -416,7 +416,7 @@ export class TelegramBotService {
         ? "- VS Code mode/new-chat use strict confirmation semantics: switched only on exact Ask/Agent/Plan or new-chat signal; otherwise explicit unverified/failed."
         : null;
     return [
-      `# Gantry (${ide}) - Full Help`,
+      `# Courier (${ide}) - Full Help`,
       "",
       "## Core",
       `- \`/newchat\` start a new chat in ${ide}`,

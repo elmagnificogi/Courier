@@ -70,7 +70,7 @@ export function startHealthServer(): void {
       res.end(
         JSON.stringify({
           ok: true,
-          service: "gantry",
+          service: "courier",
           backend: config.bridgeBackendMode,
           adapters: enabledAdapterNames()
         })
@@ -117,7 +117,7 @@ export function startHealthServer(): void {
           id: `chatcmpl-${Date.now()}`,
           object: "chat.completion",
           created: Math.floor(Date.now() / 1000),
-          model: body.model || "gantry",
+          model: body.model || "courier",
           choices: [
             {
               index: 0,

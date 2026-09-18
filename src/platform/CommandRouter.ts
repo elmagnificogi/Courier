@@ -236,7 +236,7 @@ export class CommandRouter {
 
   private helpText(): string {
     return [
-      "Gantry 命令：",
+      "Courier 命令：",
       config.bridgeIdeTarget === "windsurf" ? "/mode ask|code|plan" : "/mode ask|code|plan|debug  切换模式",
       "/model [模型名]  查看或切换模型",
       "/newchat  新开 IDE 对话",

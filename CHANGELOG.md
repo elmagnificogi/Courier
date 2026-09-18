@@ -13,6 +13,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `/choose` support on the shared CommandRouter used by non-Telegram adapters.
 
 ### Changed
+- Renamed the project from Gantry to Courier.
 - `TELEGRAM_BOT_TOKEN` is optional so a machine can run WeCom/WeChat/QQ/HTTP only.
 - Re-licensed Gantry from AGPL-3.0 to MIT.
 - Standardized attribution: Copyright holder is Grasp Visual LLC, created by Alan Perez.

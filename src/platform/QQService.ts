@@ -168,7 +168,7 @@ export class QQService {
     if (config.qq.allowedOpenIds.length > 0 && !config.qq.allowedOpenIds.includes(openId)) {
       await this.sendPrivate(
         openId,
-        `未授权用户。\n你的 user_openid：\n${openId}\n请写入 QQ_ALLOWED_OPEN_IDS 后重启 Gantry。`,
+        `未授权用户。\n你的 user_openid：\n${openId}\n请写入 QQ_ALLOWED_OPEN_IDS 后重启 Courier。`,
         msgId
       );
       return;
@@ -181,7 +181,7 @@ export class QQService {
       await this.relayAndReply(openId, msgId, text, "private");
     } catch (error) {
       logger.warn({ error, openId }, "QQ command failed");
-      await this.sendPrivate(openId, "请求失败，请查看 Gantry 日志。", msgId);
+      await this.sendPrivate(openId, "请求失败，请查看 Courier 日志。", msgId);
     }
   }
 
@@ -207,7 +207,7 @@ export class QQService {
       await this.relayAndReply(groupOpenId, msgId, text, "group", memberOpenId);
     } catch (error) {
       logger.warn({ error, groupOpenId }, "QQ group command failed");
-      await this.sendGroup(groupOpenId, "请求失败，请查看 Gantry 日志。", msgId);
+      await this.sendGroup(groupOpenId, "请求失败，请查看 Courier 日志。", msgId);
     }
   }
 
@@ -307,7 +307,7 @@ export class QQService {
       "你的 QQ user_openid（填入 QQ_ALLOWED_OPEN_IDS）：",
       openId,
       "",
-      "这不是 QQ 号，而是当前机器人签发的用户标识。复制到 .env 后重启 Gantry。"
+      "这不是 QQ 号，而是当前机器人签发的用户标识。复制到 .env 后重启 Courier。"
     ].join("\n");
   }
 
@@ -452,8 +452,8 @@ export class QQService {
             shard: [0, 1],
             properties: {
               $os: process.platform,
-              $browser: "gantry",
-              $device: "gantry"
+              $browser: "courier",
+              $device: "courier"
             }
           }
         });
