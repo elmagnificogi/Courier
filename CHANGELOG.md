@@ -8,6 +8,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased]
 
 ### Added
+- QQ inbound photos: download `attachments.url`, inject into the Cursor composer, and relay the next text (or same-message caption) with the pending image.
 - Official WeCom (企业微信), WeChat Official Account, and QQ bot adapters for the same command surface as Telegram/Feishu (`/help`, `/mode`, `/choose`, prompt relay).
 - IM notification hub so CDP preflight alerts fan out to every enabled adapter, not only Telegram.
 - `/choose` support on the shared CommandRouter used by non-Telegram adapters.

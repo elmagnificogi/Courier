@@ -87,16 +87,18 @@ export class BridgeService {
   async relayPromptForPendingAttachment(
     prompt: string,
     kind: "photo" | "document",
-    fileName?: string
+    fileName?: string,
+    options?: SendPromptOptions
   ): Promise<string> {
-    const options: { preferAttachmentComposer?: boolean; attachmentKind?: "photo" | "document"; attachmentFileName?: string } = {
+    const relayOptions: SendPromptOptions = {
       preferAttachmentComposer: true,
-      attachmentKind: kind
+      attachmentKind: kind,
+      ...options
     };
     if (fileName) {
-      options.attachmentFileName = fileName;
+      relayOptions.attachmentFileName = fileName;
     }
-    const result = await this.ideClient.sendPrompt(prompt, options);
+    const result = await this.ideClient.sendPrompt(prompt, relayOptions);
     return result.text;
   }
 

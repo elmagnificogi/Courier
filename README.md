@@ -101,7 +101,7 @@ Cursor 的回复**不是**走官方 Agent SDK，也不是读内部 SQLite。默�
 | **Telegram（主界面）** | 完整命令、行内按钮/快捷操作、图片/文件附件、重启通知、自动提问提醒（不一定可靠） |
 | **企业微信** | 官方回调 + 应用消息接口。文本命令、`/choose`、白名单、启动告警。图片请用 `/attach` 本地路径。个人微信可通过「微信插件」给该应用发消息。 |
 | **微信公众号** | 官方回调 + 客服消息。文本命令。用户需先给公众号发过消息（48 小时窗口）。 |
-| **QQ 机器人** | 默认官方 WebSocket（本机出站，不需要公网）。也可改 Webhook。单聊流式刷新 Cursor 正文（Markdown 子集）；群聊发 Markdown 终稿。`/whoami` 取 openid。`/choose`、`/target`。 |
+| **QQ 机器人** | 默认官方 WebSocket（本机出站，不需要公网）。也可改 Webhook。单聊流式刷新 Cursor 正文（Markdown 子集）；群聊发 Markdown 终稿。私聊/群聊图片会下载后注入 Cursor（先发图再发文字，或图文一起发）。`/whoami` 取 openid。`/choose`、`/target`。 |
 | **Discord** | 仅文本回复（无按钮、无重启通知、附件有限） |
 | **HTTP API** | OpenAI 兼容的 `POST /v1/chat/completions`（best-effort） |
 | **飞书 / Lark** | 仅文本命令（无按钮/附件） |

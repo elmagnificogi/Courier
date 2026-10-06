@@ -18,7 +18,42 @@ export class CommandRouter {
   private readonly lastPromptByChannel = new Map<string, { prompt: string; at: number }>();
   private readonly activeRequestByChannel = new Map<string, number>();
   private readonly progressByChannel = new Map<string, ProgressState>();
+  private readonly pendingAttachmentByChannel = new Map<
+    string,
+    { kind: "photo" | "document"; createdAt: number; fileName?: string }
+  >();
   private nextRequestId = 1;
+
+  async attachPhoto(
+    channelId: string,
+    filePath: string,
+    options?: { prompt?: string; fileName?: string; mimeType?: string } & SendPromptOptions
+  ): Promise<string> {
+    const prompt = String(options?.prompt ?? "").trim();
+    const injectOptions: { autoSubmit: false; fileName?: string; mimeType?: string } = { autoSubmit: false };
+    if (options?.fileName) {
+      injectOptions.fileName = options.fileName;
+    }
+    if (options?.mimeType) {
+      injectOptions.mimeType = options.mimeType;
+    }
+    const status = await this.bridge.injectPhoto(filePath, injectOptions);
+    if (/failed|无法注入/i.test(status)) {
+      return status;
+    }
+    const pending: { kind: "photo" | "document"; createdAt: number; fileName?: string } = {
+      kind: "photo",
+      createdAt: Date.now()
+    };
+    if (options?.fileName) {
+      pending.fileName = options.fileName;
+    }
+    this.pendingAttachmentByChannel.set(channelId, pending);
+    if (!prompt) {
+      return "图已放进 Cursor 输入框。下一条文字会连这张图一起发出去。";
+    }
+    return await this.relayPrompt(channelId, prompt, options);
+  }
 
   async handle(channelId: string, text: string, options?: SendPromptOptions): Promise<string> {
     const value = text.trim();
@@ -82,10 +117,16 @@ export class CommandRouter {
       return TextSecurityGuard.sanitizeOutbound(await this.bridge.selectTarget(index));
     }
     if (value === "/queue") {
-      return "附件队列仅在 Telegram 中可用。";
+      const pending = this.pendingAttachmentByChannel.get(channelId);
+      if (!pending) {
+        return "没有待处理附件。";
+      }
+      const age = Math.max(0, Math.round((Date.now() - pending.createdAt) / 1000));
+      return `待处理：${pending.kind}${pending.fileName ? ` ${pending.fileName}` : ""}（${age}秒前）`;
     }
     if (value === "/clearqueue") {
-      return "附件队列仅在 Telegram 中可用。";
+      this.pendingAttachmentByChannel.delete(channelId);
+      return "已清空附件队列。";
     }
     if (value === "/progress") {
       return this.progressStatus(channelId);
@@ -182,7 +223,10 @@ export class CommandRouter {
       if (options?.signal) {
         relayOptions.signal = options.signal;
       }
-      const response = await this.bridge.relayPrompt(prompt, relayOptions);
+      const pending = this.takePendingAttachment(channelId);
+      const response = pending
+        ? await this.bridge.relayPromptForPendingAttachment(prompt, pending.kind, pending.fileName, relayOptions)
+        : await this.bridge.relayPrompt(prompt, relayOptions);
       this.stateStore.recordDelivered(this.channelKeyToNumber(channelId), response, requestId, Date.now());
       this.progressByChannel.delete(channelId);
       this.activeRequestByChannel.delete(channelId);
@@ -267,8 +311,25 @@ export class CommandRouter {
       "/targets  同 /chats",
       "/target <序号>|auto  选择目标",
       "/diag  诊断",
-      "/whoami  查看你的 QQ openid"
+      "/whoami  查看你的 QQ openid",
+      "/queue  查看待发送的图",
+      "/clearqueue  清掉待发送的图",
+      "QQ 发图后，再发文字，会连图一起进 Cursor"
     ].join("\n");
+  }
+
+  private takePendingAttachment(
+    channelId: string
+  ): { kind: "photo" | "document"; createdAt: number; fileName?: string } | undefined {
+    const pending = this.pendingAttachmentByChannel.get(channelId);
+    if (!pending) {
+      return undefined;
+    }
+    this.pendingAttachmentByChannel.delete(channelId);
+    if (Date.now() - pending.createdAt > 15 * 60 * 1000) {
+      return undefined;
+    }
+    return pending;
   }
 }
 
