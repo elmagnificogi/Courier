@@ -11,7 +11,7 @@ export class CodexAutomationClient {
 
   async listChatTargets(): Promise<CdpTargetSummary[]> {
     try {
-      return await this.cdp.listTargets();
+      return await this.cdp.listPageTargets();
     } catch (error) {
       logger.warn({ error }, "Failed to list Codex targets through CDP");
       return [];
@@ -304,16 +304,8 @@ export class CodexAutomationClient {
   }
 
   private async readAssistant(client: ClientDomains): Promise<string | null> {
-    const selector = config.codexResponseSelector;
-    const expression = `(() => {
-      const configured = ${JSON.stringify(selector)};
-      const nodes = Array.from(document.querySelectorAll(configured || '[class*="markdown"], article'));
-      const text = nodes.map((node) => String(node.innerText || '').trim()).filter((value) => value.length > 0);
-      if (text.length === 0) return null;
-      return text[text.length - 1];
-    })()`;
-    const value = await this.cdp.evaluateJson<string | null>(client, expression);
-    return value && value.trim() ? value.trim() : null;
+    const snapshot = await this.readTurn(client);
+    return snapshot.text;
   }
 
   private async pollAssistant(
@@ -325,43 +317,64 @@ export class CodexAutomationClient {
     const started = Date.now();
     let latest = baseline;
     let lastChange = started;
+    let sawGeneration = false;
     while (Date.now() - started < maxMs) {
       if (options?.signal?.aborted) {
         break;
       }
-      await wait(1500);
+      await wait(1200);
       const snapshot = await this.readTurn(client);
+      if (snapshot.generating) {
+        sawGeneration = true;
+      }
       if (snapshot.text && snapshot.text !== latest) {
         latest = snapshot.text;
         lastChange = Date.now();
         if (options?.onProgress && latest !== baseline) {
-          await options.onProgress({ phase: snapshot.generating ? "working" : "waiting", text: `${ideDisplayName()} 正在回复…`, content: latest });
+          await options.onProgress({
+            phase: snapshot.generating ? "working" : "waiting",
+            text: `${ideDisplayName("codex")} 正在回复…`,
+            content: latest
+          });
         }
       }
       const changed = Boolean(latest && latest !== baseline);
       const quietFor = Date.now() - lastChange;
-      if (changed && !snapshot.generating && quietFor > 6000) {
-        break;
-      }
-      if (changed && !snapshot.generating && quietFor > 12000) {
+      if (changed && snapshot.finalized && !snapshot.generating && quietFor > 2000 && (sawGeneration || quietFor > 2000)) {
         break;
       }
     }
     return latest && latest !== baseline ? latest : null;
   }
 
-  private async readTurn(client: ClientDomains): Promise<{ text: string | null; generating: boolean }> {
-    const text = await this.readAssistant(client);
-    const generating = Boolean(
-      await this.cdp.evaluateJson<boolean>(
-        client,
-        `(() => {
-          const nodes = Array.from(document.querySelectorAll('button,[role="button"],[aria-label]'));
-          return nodes.some((el) => /stop|停止|cancel generating/i.test(String(el.innerText || el.getAttribute('aria-label') || '')));
-        })()`
-      )
+  private async readTurn(client: ClientDomains): Promise<{ text: string | null; generating: boolean; finalized: boolean }> {
+    const snapshot = await this.cdp.evaluateJson<{ text: string | null; generating: boolean; finalized: boolean }>(
+      client,
+      `(() => {
+        const assistants = Array.from(document.querySelectorAll('[data-markdown-text-style="assistant-message"]'));
+        const last = assistants.length > 0 ? assistants[assistants.length - 1] : null;
+        const turn = last ? last.closest('[data-content-search-turn-key]') : null;
+        const nodes = turn
+          ? Array.from(turn.querySelectorAll('[data-markdown-text-style="assistant-message"]'))
+          : (last ? [last] : []);
+        const parts = nodes
+          .map((node) => String(node.innerText || '').trim())
+          .filter((value) => value.length > 0);
+        const text = parts.length > 0 ? parts.join('\\n\\n') : null;
+        const finalized = Boolean(last && last.closest('[data-local-conversation-final-assistant="true"]'));
+        const stop = Array.from(document.querySelectorAll('button,[role="button"]')).some((el) => {
+          const rect = el.getBoundingClientRect();
+          const label = String(el.getAttribute('aria-label') || el.innerText || '');
+          return rect.width > 4 && rect.height > 4 && /stop|停止/i.test(label);
+        });
+        return { text, generating: stop || Boolean(text && !finalized), finalized };
+      })()`
     );
-    return { text, generating };
+    return {
+      text: snapshot?.text?.trim() ? snapshot.text.trim() : null,
+      generating: snapshot?.generating === true,
+      finalized: snapshot?.finalized === true
+    };
   }
 
   private async clickLabel(client: ClientDomains, label: string): Promise<boolean> {

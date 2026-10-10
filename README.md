@@ -217,7 +217,7 @@ Courier 需要当前用户桌面会话（要连本机 Cursor 的 CDP），所以
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows/install-autostart.ps1
 ```
 
-之后每次登录会后台拉起 Courier。Node.js 从当前 PATH、用户/系统环境变量和常见安装位置查找，不写死盘符；也可以用 `COURIER_NODE` 指定 `node.exe` 的完整路径。配置文件优先用已设置的 `DOTENV_CONFIG_PATH`，否则用 `.env`；没有 `.env` 且只有一份 `.env.cursor` / `.env.codex` / `.env.windsurf` / `.env.vscode` 时用那一份。若 8787 已经在听则跳过，避免重复实例。日志在 `tmp/courier-autostart.log`。停掉当前这次运行（不会取消登录自启）：
+之后每次登录会后台拉起 Courier。Node.js 从当前 PATH、用户/系统环境变量和常见安装位置查找，不写死盘符；也可以用 `COURIER_NODE` 指定 `node.exe` 的完整路径。配置文件优先用已设置的 `DOTENV_CONFIG_PATH`，否则用 `.env`；没有 `.env` 时按 `.env.cursor`、`.env.codex`、`.env.windsurf`、`.env.vscode` 的顺序用第一份。同时有多份时仍只加载这一份，对话里用 `/targets` 选择要发往的 IDE 窗口。若 8787 已经在听则跳过，避免重复实例。日志在 `tmp/courier-autostart.log`。停掉当前这次运行（不会取消登录自启）：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows/stop-courier.ps1
@@ -327,7 +327,9 @@ QQ_ALLOWED_GROUP_OPEN_IDS=...     # 可选，群 openid 白名单
 
 QQ Markdown 是子集（标题、加粗、列表、代码块、链接），对不上 Cursor 工作台的语法高亮、diff、工具卡片、思考折叠。单条流式消息大约 4000 字，超出部分会另发一条。
 
-开了两个 Cursor 窗口时，它们通常是**同一个进程的两个页面**（CDP 端口相同）。`/targets` 只列出窗口标题；用 `/target 2` 固定当前工程，避免消息进错窗口。真正并行两套 IDE 需要两份 `--user-data-dir`、两个调试端口、两套 Courier。
+一个 Courier 进程可以同时把不同对话发给不同 IDE。`/targets` 把 Cursor、Codex、Windsurf、VS Code 里已经打开调试端口的窗口列在一起，例如 `1. Cursor  …`、`2. Codex  …`。`/target 2` 把当前对话改发到这一项，文字、图片和文件都跟着走。`/target auto` 改回 `BRIDGE_IDE_TARGET` 的自动选择。
+
+同一个 IDE 里开了多个窗口时，它们通常是同一个进程的多个页面，会在这份列表里各占一行。
 
 ---
 
@@ -362,8 +364,8 @@ QQ Markdown 是子集（标题、加粗、列表、代码块、链接），对�
 | `/context`                     | Context 窗口用量                              |
 | `/usage`                       | 用量/账单状态                                   |
 | `/progress`                    | 当前请求状态 + 已用时间                             |
-| `/targets` 或 `/chats`          | 列出可用 IDE 窗口（只显示标题，不含 URL）                 |
-| `/target <n>` 或 `/target auto` | 固定第 n 个窗口，或改回自动选择                         |
+| `/targets` 或 `/chats`          | 列出各 IDE 已打开调试端口的窗口（带 IDE 名，不含 URL） |
+| `/target <n>` 或 `/target auto` | 把当前对话发到第 n 项，或改回默认 IDE 的自动选择 |
 | `/whoami`                      | QQ 场景下查看 `user_openid` / 群 `group_openid` |
 | `/history [n|clear]`           | 最近回复，或清空历史                                |
 | `/cancel [all]`                | 停止后续轮询                                    |
@@ -504,7 +506,7 @@ $env:DOTENV_CONFIG_PATH=".env.cursor"; npx tsx src/index.ts
 $env:DOTENV_CONFIG_PATH=".env.windsurf"; npx tsx src/index.ts
 ```
 
-每个实例需要自己的 bot token（或企业微信/微信/QQ 凭证）、`PORT` 和 `BRIDGE_IDE_TARGET`。Telegram 请在 @BotFather 各建一个机器人。
+每个实例需要自己的 bot token（或企业微信/微信/QQ 凭证）、`PORT` 和 `BRIDGE_IDE_TARGET`。Telegram 请在 @BotFather 各建一个机器人。同一个进程要同时照顾多个 IDE 时，不用再起第二份 Courier：对话里用 `/targets` 选择窗口，调试端口各自独立。两份进程仍用于两套机器人或两个 HTTP 端口。
 
 ### CDP 与 API 后端
 
@@ -545,7 +547,7 @@ $env:DOTENV_CONFIG_PATH=".env.windsurf"; npx tsx src/index.ts
 | `NODE_ENV`                    | `development` | 运行环境                                   |
 | `LOG_LEVEL`                   | `info`        | Pino 日志级别                              |
 | `PORT`                        | `8787`        | HTTP 服务端口                              |
-| `BRIDGE_IDE_TARGET`           | `cursor`      | `cursor`、`codex`、`windsurf` 或 `vscode` |
+| `BRIDGE_IDE_TARGET`           | `cursor`      | 新对话的默认 IDE：`cursor`、`codex`、`windsurf` 或 `vscode`。对话里用 `/targets` 改发到另一个已打开调试端口的窗口 |
 | `BRIDGE_BACKEND_MODE`         | `cdp`         | `cdp` 或 `api`                          |
 | `BRIDGE_API_AUTH_TOKEN`       | —             | HTTP API 可选 Bearer token               |
 | `TELEGRAM_ALLOWED_USER_IDS`   | —             | 逗号分隔白名单                                |

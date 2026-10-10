@@ -8,6 +8,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased]
 
 ### Added
+- One Courier process lists every open IDE window in `/targets`. `/target <n>` sends that chat to the chosen Cursor, Codex, Windsurf, or VS Code window. Codex auxiliary pages (avatar overlay and detached window) stay off that list.
 - WeCom intelligent robot over WebSocket (`wss://openws.work.weixin.qq.com`). No public callback URL. Text, voice transcript, image, file, and mixed messages are decrypted and injected into the active IDE.
 - Codex desktop as `BRIDGE_IDE_TARGET=codex`, driven through CDP on port 9225.
 - QQ file attachments (`content_type=file` and other non-image files) download and inject the same way photos already did.

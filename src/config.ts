@@ -276,15 +276,35 @@ export const config = {
   port: env.PORT
 };
 
-export function ideDisplayName(): string {
-  if (config.bridgeIdeTarget === "windsurf") return "Windsurf";
-  if (config.bridgeIdeTarget === "vscode") return "VS Code";
-  if (config.bridgeIdeTarget === "codex") return "Codex";
+export type IdeTarget = "cursor" | "windsurf" | "vscode" | "codex";
+
+export const IDE_TARGETS: readonly IdeTarget[] = ["cursor", "windsurf", "vscode", "codex"];
+
+export function parseIdeTarget(raw: string): IdeTarget | null {
+  const value = raw.trim().toLowerCase().replace(/[\s_-]+/g, "");
+  if (value === "cursor") return "cursor";
+  if (value === "windsurf") return "windsurf";
+  if (value === "codex") return "codex";
+  if (value === "vscode" || value === "code") return "vscode";
+  return null;
+}
+
+export function ideDisplayName(ide: IdeTarget = config.bridgeIdeTarget): string {
+  if (ide === "windsurf") return "Windsurf";
+  if (ide === "vscode") return "VS Code";
+  if (ide === "codex") return "Codex";
   return "Cursor";
 }
 
-export function ideSupportsDebugMode(): boolean {
-  return config.bridgeIdeTarget === "cursor";
+export function ideSupportsDebugMode(ide: IdeTarget = config.bridgeIdeTarget): boolean {
+  return ide === "cursor";
+}
+
+export function ideDebugUrl(ide: IdeTarget): string {
+  if (ide === "windsurf") return config.windsurfRemoteDebugUrl;
+  if (ide === "vscode") return config.vscodeRemoteDebugUrl;
+  if (ide === "codex") return config.codexRemoteDebugUrl;
+  return config.cursorRemoteDebugUrl;
 }
 
 export function enabledAdapterNames(): string[] {

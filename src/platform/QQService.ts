@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createPrivateKey, createPublicKey, sign, verify } from "node:crypto";
-import { config, ideDisplayName } from "../config";
+import { config } from "../config";
 import { logger } from "../logger";
 import { AgentProgressEvent } from "../types";
 import { CommandRouter } from "./CommandRouter";
@@ -323,7 +323,7 @@ export class QQService {
         if (prompt && this.isRelayText(prompt)) {
           attachOptions.prompt = prompt;
           if (stream) {
-            await send(`附件已收到，正在转发给 ${ideDisplayName()}…`);
+            await send(`附件已收到，正在转发给 ${this.router.ideLabel(channelId)}…`);
             attachOptions.onProgress = async (event) => {
               const snapshot = event.content?.trim();
               if (snapshot) {
@@ -433,7 +433,7 @@ export class QQService {
     }
 
     if (kind === "private") {
-      await this.sendPrivate(targetId, `已转发给 ${ideDisplayName()}，正在流式同步回复…`, msgId);
+      await this.sendPrivate(targetId, `已转发给 ${this.router.ideLabel(channelId)}，正在流式同步回复…`, msgId);
       const stream: C2cStreamState = {
         streamMsgId: null,
         index: 0,
@@ -464,7 +464,7 @@ export class QQService {
       return;
     }
 
-    await send(`已转发给 ${ideDisplayName()}，正在同步完整回复…`);
+    await send(`已转发给 ${this.router.ideLabel(channelId)}，正在同步完整回复…`);
     let lastProgress = "";
     let lastProgressAt = 0;
     const reply = await this.router.handle(channelId, text, {

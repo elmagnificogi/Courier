@@ -154,11 +154,13 @@ function Resolve-EnvFile([string]$projectRoot) {
       }
     }
   )
-  if ($named.Count -eq 1) {
-    return (Resolve-Path -LiteralPath $named[0]).Path
-  }
-  if ($named.Count -gt 1) {
-    $script:envNote = "Multiple env files found. Set DOTENV_CONFIG_PATH. Candidates: {0}" -f ($named -join ", ")
+  if ($named.Count -ge 1) {
+    $chosen = (Resolve-Path -LiteralPath $named[0]).Path
+    if ($named.Count -gt 1) {
+      $ignored = ($named | Select-Object -Skip 1) -join ", "
+      $script:envNote = "Multiple env files found. Using $chosen. Pick an IDE window in chat with /targets. Ignored: $ignored"
+    }
+    return $chosen
   }
   return $null
 }

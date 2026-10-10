@@ -17,7 +17,7 @@ async function main(): Promise<void> {
   startHealthServer();
   const ideName = ideDisplayName();
   logger.info(
-    `${ideName} multi-platform bridge started (target=${config.bridgeIdeTarget}, port=${config.port}, adapters=${enabledAdapterNames().join(",")})`
+    `${ideName} multi-platform bridge started (default=${config.bridgeIdeTarget}, port=${config.port}, adapters=${enabledAdapterNames().join(",")}; /targets lists every IDE window)`
   );
 
   runStartupPreflightCheck((msg) => notificationHub.notifyAll(msg)).catch(() => {});

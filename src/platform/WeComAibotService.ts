@@ -2,7 +2,7 @@ import WebSocket from "ws";
 import { mkdirSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { extname, join } from "node:path";
-import { config, ideDisplayName } from "../config";
+import { config } from "../config";
 import { logger } from "../logger";
 import { AgentProgressEvent } from "../types";
 import { CommandRouter } from "./CommandRouter";
@@ -273,7 +273,7 @@ export class WeComAibotService {
               await this.pushStream(reqId, streamId, snapshot, false);
             }
           };
-          await this.pushStream(reqId, streamId, `已收到${item.kind === "image" ? "图片" : "文件"}，正在转发给 ${ideDisplayName()}…`, false);
+          await this.pushStream(reqId, streamId, `已收到${item.kind === "image" ? "图片" : "文件"}，正在转发给 ${this.router.ideLabel(channelId)}…`, false);
           lastReply = await this.router.attachMedia(
             channelId,
             downloaded.path,
@@ -298,7 +298,7 @@ export class WeComAibotService {
       return;
     }
     const streamId = `stream-${reqId}`;
-    await this.pushStream(reqId, streamId, `已转发给 ${ideDisplayName()}，正在同步回复…`, false);
+    await this.pushStream(reqId, streamId, `已转发给 ${this.router.ideLabel(channelId)}，正在同步回复…`, false);
     try {
       const reply = await this.router.handle(channelId, text, {
         onProgress: async (event) => {

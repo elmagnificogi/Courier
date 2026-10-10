@@ -8,5 +8,8 @@ if exist "%LOCALAPPDATA%\Programs\ChatGPT\ChatGPT.exe" (
   "%LOCALAPPDATA%\Programs\ChatGPT\ChatGPT.exe" --remote-debugging-port=9225 --remote-allow-origins=*
   goto :eof
 )
-echo Codex.exe / ChatGPT.exe was not found under %%LOCALAPPDATA%%\Programs.
-echo Start the Codex desktop app manually with --remote-debugging-port=9225
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\windows\launch-codex-debug.ps1"
+if errorlevel 1 (
+  echo Codex.exe / ChatGPT.exe was not found, and the Store app could not be activated.
+  echo Start the Codex desktop app manually with --remote-debugging-port=9225
+)

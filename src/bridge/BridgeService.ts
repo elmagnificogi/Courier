@@ -6,7 +6,7 @@ import path from "path";
 import { WindsurfAutomationClient } from "../windsurf/WindsurfAutomationClient";
 import { ImageInjectionService } from "../media/ImageInjectionService";
 import { BridgeMode, SendPromptOptions } from "../types";
-import { config, ideDisplayName } from "../config";
+import { config, IDE_TARGETS, IdeTarget, ideDisplayName } from "../config";
 import { CodexAutomationClient } from "../codex/CodexAutomationClient";
 import { CursorApiBackend } from "../backends/CursorApiBackend";
 import { logger } from "../logger";
@@ -16,24 +16,47 @@ type IdeClient = CursorAutomationClient | WindsurfAutomationClient | VscodeAutom
 
 export class BridgeService {
   private readonly apiBackend = new CursorApiBackend();
-  private readonly ideClient: IdeClient;
+  private readonly sqliteDiagnostics = new CursorSqliteDiagnostics();
+  private readonly clients: Record<IdeTarget, IdeClient>;
+  private readonly injectors: Record<IdeTarget, ImageInjectionService>;
+  private readonly contexts = new Map<IdeTarget, CursorContextExtractor>();
 
-  constructor(
-    private readonly cursorClient = new CursorAutomationClient(),
-    private readonly contextExtractor = new CursorContextExtractor(),
-    private readonly sqliteDiagnostics = new CursorSqliteDiagnostics(),
-    private readonly imageInjector = new ImageInjectionService(),
-    private readonly vscodeClient = new VscodeAutomationClient()
-  ) {
-    if (config.bridgeIdeTarget === "windsurf") {
-      this.ideClient = new WindsurfAutomationClient();
-    } else if (config.bridgeIdeTarget === "vscode") {
-      this.ideClient = this.vscodeClient;
-    } else if (config.bridgeIdeTarget === "codex") {
-      this.ideClient = new CodexAutomationClient();
-    } else {
-      this.ideClient = this.cursorClient;
+  constructor() {
+    this.clients = {
+      cursor: new CursorAutomationClient(),
+      windsurf: new WindsurfAutomationClient(),
+      vscode: new VscodeAutomationClient(),
+      codex: new CodexAutomationClient()
+    };
+    this.injectors = {
+      cursor: new ImageInjectionService("cursor"),
+      windsurf: new ImageInjectionService("windsurf"),
+      vscode: new ImageInjectionService("vscode"),
+      codex: new ImageInjectionService("codex")
+    };
+  }
+
+  private resolve(ide?: IdeTarget): IdeTarget {
+    return ide ?? config.bridgeIdeTarget;
+  }
+
+  private client(ide?: IdeTarget): IdeClient {
+    return this.clients[this.resolve(ide)];
+  }
+
+  private injector(ide?: IdeTarget): ImageInjectionService {
+    return this.injectors[this.resolve(ide)];
+  }
+
+  private contextExtractor(ide?: IdeTarget): CursorContextExtractor {
+    const key = this.resolve(ide);
+    const existing = this.contexts.get(key);
+    if (existing) {
+      return existing;
     }
+    const created = new CursorContextExtractor(key);
+    this.contexts.set(key, created);
+    return created;
   }
 
   async restart(): Promise<string> {
@@ -73,19 +96,19 @@ export class BridgeService {
     return "Restarting bridge...";
   }
 
-  async switchMode(mode: BridgeMode): Promise<string> {
+  async switchMode(mode: BridgeMode, ide?: IdeTarget): Promise<string> {
     if (config.bridgeBackendMode === "api") {
       return (await this.apiBackend.switchMode(mode)).text;
     }
-    const result = await this.ideClient.setMode(mode);
+    const result = await this.client(ide).setMode(mode);
     return result.text;
   }
 
-  async relayPrompt(prompt: string, options?: SendPromptOptions): Promise<string> {
+  async relayPrompt(prompt: string, options?: SendPromptOptions, ide?: IdeTarget): Promise<string> {
     if (config.bridgeBackendMode === "api") {
       return (await this.apiBackend.relayPrompt(prompt)).text;
     }
-    const result = await this.ideClient.sendPrompt(prompt, options);
+    const result = await this.client(ide).sendPrompt(prompt, options);
     return result.text;
   }
 
@@ -93,7 +116,8 @@ export class BridgeService {
     prompt: string,
     kind: "photo" | "document",
     fileName?: string,
-    options?: SendPromptOptions
+    options?: SendPromptOptions,
+    ide?: IdeTarget
   ): Promise<string> {
     const relayOptions: SendPromptOptions = {
       preferAttachmentComposer: true,
@@ -103,62 +127,64 @@ export class BridgeService {
     if (fileName) {
       relayOptions.attachmentFileName = fileName;
     }
-    const result = await this.ideClient.sendPrompt(prompt, relayOptions);
+    const result = await this.client(ide).sendPrompt(prompt, relayOptions);
     return result.text;
   }
 
-  async latestResponse(): Promise<string | null> {
+  async latestResponse(ide?: IdeTarget): Promise<string | null> {
     if (config.bridgeBackendMode === "api") {
       return await this.apiBackend.latestResponse();
     }
-    return await this.ideClient.latestAssistantSnippet();
+    return await this.client(ide).latestAssistantSnippet();
   }
 
-  async newChat(): Promise<string> {
+  async newChat(ide?: IdeTarget): Promise<string> {
     if (config.bridgeBackendMode === "api") {
       return (await this.apiBackend.newChat()).text;
     }
-    const result = await this.ideClient.newChat();
+    const result = await this.client(ide).newChat();
     return result.text;
   }
 
-  async getModel(): Promise<string> {
+  async getModel(ide?: IdeTarget): Promise<string> {
     if (config.bridgeBackendMode === "api") {
       return "API 后端模式下无法探测模型。";
     }
-    const result = await this.ideClient.getModel();
+    const result = await this.client(ide).getModel();
     return result.text;
   }
 
-  async setModel(modelName: string): Promise<string> {
+  async setModel(modelName: string, ide?: IdeTarget): Promise<string> {
     if (config.bridgeBackendMode === "api") {
       return "API 后端模式下无法切换模型。";
     }
-    const result = await this.ideClient.setModel(modelName);
+    const result = await this.client(ide).setModel(modelName);
     return result.text;
   }
 
-  async listModels(): Promise<string> {
+  async listModels(ide?: IdeTarget): Promise<string> {
     if (config.bridgeBackendMode === "api") {
       return "API 后端模式下无法列出模型。";
     }
-    if (config.bridgeIdeTarget === "windsurf" && this.ideClient instanceof WindsurfAutomationClient) {
-      const result = await this.ideClient.listModels();
+    const target = this.resolve(ide);
+    const selected = this.clients[target];
+    if (target === "windsurf" && selected instanceof WindsurfAutomationClient) {
+      const result = await selected.listModels();
       return result.text;
     }
-    if (config.bridgeIdeTarget === "vscode" && this.ideClient instanceof VscodeAutomationClient) {
-      const result = await this.ideClient.listModels();
+    if (target === "vscode" && selected instanceof VscodeAutomationClient) {
+      const result = await selected.listModels();
       return result.text;
     }
-    if (config.bridgeIdeTarget === "codex" && this.ideClient instanceof CodexAutomationClient) {
-      const result = await this.ideClient.listModels();
+    if (target === "codex" && selected instanceof CodexAutomationClient) {
+      const result = await selected.listModels();
       return result.text;
     }
     return "目前只有 Windsurf、VS Code 和 Codex 支持列出模型。";
   }
 
-  async contextStatus(): Promise<string> {
-    const context = await this.contextExtractor.readContextPercentage();
+  async contextStatus(ide?: IdeTarget): Promise<string> {
+    const context = await this.contextExtractor(ide).readContextPercentage();
 
     const percentText = context.percent === null ? "不可用" : `${context.percent}%`;
     return [
@@ -167,8 +193,8 @@ export class BridgeService {
     ].join("\n");
   }
 
-  async usageStatus(): Promise<string> {
-    const context = await this.contextExtractor.readContextPercentage();
+  async usageStatus(ide?: IdeTarget): Promise<string> {
+    const context = await this.contextExtractor(ide).readContextPercentage();
 
     const lines = [
       "用量状态",
@@ -178,58 +204,85 @@ export class BridgeService {
     return lines.join("\n");
   }
 
-  async listChats(): Promise<string> {
+  private async routedTargets(): Promise<Array<{ ide: IdeTarget; localIndex: number; id: string; title: string; pinned: boolean }>> {
+    const groups = await Promise.all(
+      IDE_TARGETS.map(async (ide) => {
+        const client = this.clients[ide];
+        const targets = await client.listChatTargets();
+        const selection = await client.targetSelectionStatus();
+        return targets
+          .filter((target) => target.type === "page")
+          .slice(0, 10)
+          .map((target, index) => ({
+            ide,
+            localIndex: index + 1,
+            id: target.id,
+            title: target.title || "（无标题）",
+            pinned: selection.mode === "manual" && selection.manualTargetId === target.id
+          }));
+      })
+    );
+    return groups.flat();
+  }
+
+  async listChats(current?: IdeTarget): Promise<string> {
     if (config.bridgeBackendMode === "api") {
       return "API 后端模式下无法列出目标。";
     }
-    const ideName = ideDisplayName();
-    const targets = await this.ideClient.listChatTargets();
-    const selection = await this.ideClient.targetSelectionStatus();
-    if (targets.length === 0) {
-      return `没有找到 ${ideName} 的 CDP 目标。`;
+    const pages = await this.routedTargets();
+    if (pages.length === 0) {
+      return "没有找到已打开调试端口的窗口。Cursor 用 9222，Codex 用 9225。";
     }
-
-    const lines = targets
-      .filter((target) => target.type === "page")
-      .slice(0, 10)
-      .map((target, index) => {
-        const pinned = selection.mode === "manual" && selection.manualTargetId === target.id ? " [已固定]" : "";
-        return `${index + 1}. ${target.title || "（无标题）"}${pinned}`;
-      });
-
-    const header =
-      selection.mode === "manual"
-        ? `${ideName} 目标（选择：手动 → ${selection.manualTargetTitle ?? "未知"}）`
-        : `${ideName} 目标（选择：自动）`;
-    return `${header}\n${lines.join("\n")}`;
+    const active = this.resolve(current);
+    const lines = pages.map((page, index) => {
+      const currentWindow = page.ide === active && page.pinned;
+      const mark = currentWindow ? " [当前]" : "";
+      return `${index + 1}. ${ideDisplayName(page.ide)}  ${page.title}${mark}`;
+    });
+    return ["可用目标：", ...lines, "用 /target <序号> 把当前对话发到这一项，/target auto 改回默认 IDE 的自动选择。"].join("\n");
   }
 
-  async selectTarget(selection: "auto" | number): Promise<string> {
+  async selectRoutedTarget(
+    selection: "auto" | number,
+    current?: IdeTarget
+  ): Promise<{ text: string; ide: IdeTarget | null }> {
+    if (config.bridgeBackendMode === "api") {
+      return { text: "API 后端模式下无法选择目标。", ide: null };
+    }
+    if (selection === "auto") {
+      const ide = this.resolve(current);
+      await this.client(ide).selectTarget("auto");
+      return { text: `已改回自动选择，之后发到 ${ideDisplayName()}。`, ide: null };
+    }
+    const pages = await this.routedTargets();
+    const chosen = pages[selection - 1];
+    if (!chosen) {
+      return { text: `目标序号 ${selection} 无效。请用 /targets 查看（1-${pages.length}）。`, ide: null };
+    }
+    await this.client(chosen.ide).selectTarget(chosen.localIndex);
+    return { text: `当前对话改发到 ${ideDisplayName(chosen.ide)}：${chosen.title}`, ide: chosen.ide };
+  }
+
+  async targetStatus(ide?: IdeTarget): Promise<string> {
     if (config.bridgeBackendMode === "api") {
       return "API 后端模式下无法选择目标。";
     }
-    const result = await this.ideClient.selectTarget(selection);
-    return result.text;
-  }
-
-  async targetStatus(): Promise<string> {
-    if (config.bridgeBackendMode === "api") {
-      return "API 后端模式下无法选择目标。";
-    }
-    const selection = await this.ideClient.targetSelectionStatus();
+    const target = this.resolve(ide);
+    const selection = await this.client(target).targetSelectionStatus();
     if (selection.mode === "auto") {
-      return "目标选择：自动。";
+      return `当前对话：${ideDisplayName(target)}，窗口自动选择。发 /targets 查看全部。`;
     }
-    return `目标选择：手动 ${selection.manualTargetTitle ?? "（未知标题）"}（${selection.manualTargetId ?? "未知 id"}）。`;
+    return `当前对话：${ideDisplayName(target)}，窗口 ${selection.manualTargetTitle ?? "未知"}。`;
   }
 
-  async diagnostics(): Promise<string> {
+  async diagnostics(ide?: IdeTarget): Promise<string> {
     if (config.bridgeBackendMode === "api") {
       return await this.apiBackend.diagnostics();
     }
 
-    const ideName = ideDisplayName();
-    const diag = await this.ideClient.diagnostics();
+    const target = this.resolve(ide);
+    const ideName = ideDisplayName(target);
+    const diag = await this.client(target).diagnostics();
 
     const sel: {
       newChatCandidates?: number;
@@ -248,7 +301,7 @@ export class BridgeService {
 
     const lines = [
       `桥接诊断（${ideName}）`,
-      `- ideTarget: ${config.bridgeIdeTarget}`,
+      `- ideTarget: ${target}`,
       `- cdpReachable: ${diag.cdpReachable}`,
       `- versionEndpointReachable: ${diag.versionEndpointReachable}`,
       `- targets: total=${diag.targetCount}, pages=${diag.pageTargetCount}`,
@@ -264,8 +317,8 @@ export class BridgeService {
     ];
 
     // Cursor-specific extras
-    if (config.bridgeIdeTarget === "cursor") {
-      const context = await this.contextExtractor.readContextPercentage();
+    if (target === "cursor") {
+      const context = await this.contextExtractor(target).readContextPercentage();
       const sqlite = await this.sqliteDiagnostics.probe();
       const percentText = context.percent === null ? "不可用" : `${context.percent}%`;
       const contextLine = `- context: **${percentText}** (source=${context.source}, confidence=${context.confidence})`;
@@ -278,23 +331,25 @@ export class BridgeService {
 
   async injectPhoto(
     filePath: string,
-    options?: { autoSubmit?: boolean; fileName?: string; mimeType?: string; prompt?: string }
+    options?: { autoSubmit?: boolean; fileName?: string; mimeType?: string; prompt?: string },
+    ide?: IdeTarget
   ): Promise<string> {
     if (config.bridgeBackendMode === "api") {
       return "API 后端模式下无法注入图片。";
     }
-    const result = await this.imageInjector.injectPhotoFromTelegramFile(filePath, options);
+    const result = await this.injector(ide).injectPhotoFromTelegramFile(filePath, options);
     return result.text;
   }
 
   async injectDocument(
     filePath: string,
-    options?: { autoSubmit?: boolean; fileName?: string; mimeType?: string; prompt?: string }
+    options?: { autoSubmit?: boolean; fileName?: string; mimeType?: string; prompt?: string },
+    ide?: IdeTarget
   ): Promise<string> {
     if (config.bridgeBackendMode === "api") {
       return "API 后端模式下无法注入文件。";
     }
-    const result = await this.imageInjector.injectDocumentFromTelegramFile(filePath, options);
+    const result = await this.injector(ide).injectDocumentFromTelegramFile(filePath, options);
     return result.text;
   }
 }

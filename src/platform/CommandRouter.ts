@@ -2,7 +2,7 @@ import { BridgeService } from "../bridge/BridgeService";
 import { BridgeMode, SendPromptOptions } from "../types";
 import { ChatStateStore } from "../telegram/ChatStateStore";
 import { TextSecurityGuard } from "../security/TextSecurityGuard";
-import { ideDisplayName, ideSupportsDebugMode } from "../config";
+import { config, IdeTarget, ideDisplayName, ideSupportsDebugMode } from "../config";
 import { buildMultiChoiceRelayPrompt, buildSingleChoiceRelayPrompt, chooseUsageText } from "./choosePrompt";
 
 interface ProgressState {
@@ -22,6 +22,7 @@ export class CommandRouter {
     string,
     { kind: "photo" | "document"; createdAt: number; fileName?: string }
   >();
+  private readonly ideByChannel = new Map<string, IdeTarget>();
   private nextRequestId = 1;
 
   async attachPhoto(
@@ -46,10 +47,11 @@ export class CommandRouter {
     if (options?.mimeType) {
       injectOptions.mimeType = options.mimeType;
     }
+    const ide = this.ideFor(channelId);
     const status =
       kind === "photo"
-        ? await this.bridge.injectPhoto(filePath, injectOptions)
-        : await this.bridge.injectDocument(filePath, injectOptions);
+        ? await this.bridge.injectPhoto(filePath, injectOptions, ide)
+        : await this.bridge.injectDocument(filePath, injectOptions, ide);
     if (/failed|无法注入|失败/i.test(status)) {
       return status;
     }
@@ -61,11 +63,11 @@ export class CommandRouter {
       pending.fileName = options.fileName;
     }
     this.pendingAttachmentByChannel.set(channelId, pending);
-    const ide = ideDisplayName();
+    const ideName = ideDisplayName(ide);
     if (!prompt) {
       return kind === "photo"
-        ? `图已放进 ${ide} 输入框。下一条文字会连这张图一起发出去。`
-        : `文件已放进 ${ide} 输入框。下一条文字会连这个文件一起发出去。`;
+        ? `图已放进 ${ideName} 输入框。下一条文字会连这张图一起发出去。`
+        : `文件已放进 ${ideName} 输入框。下一条文字会连这个文件一起发出去。`;
     }
     return await this.relayPrompt(channelId, prompt, options);
   }
@@ -77,59 +79,50 @@ export class CommandRouter {
     }
 
     if (value === "/help" || value === "/start") {
-      return this.helpText();
+      return this.helpText(channelId);
     }
     if (value === "/models") {
-      return TextSecurityGuard.sanitizeOutbound(await this.bridge.listModels());
+      return TextSecurityGuard.sanitizeOutbound(await this.bridge.listModels(this.ideFor(channelId)));
     }
     if (value.startsWith("/model")) {
       const modelArg = value.replace("/model", "").trim();
+      const ide = this.ideFor(channelId);
       if (!modelArg) {
-        return TextSecurityGuard.sanitizeOutbound(await this.bridge.getModel());
+        return TextSecurityGuard.sanitizeOutbound(await this.bridge.getModel(ide));
       }
-      return TextSecurityGuard.sanitizeOutbound(await this.bridge.setModel(modelArg));
+      return TextSecurityGuard.sanitizeOutbound(await this.bridge.setModel(modelArg, ide));
     }
     if (value.startsWith("/mode")) {
       const mode = value.replace("/mode", "").trim().toLowerCase() as BridgeMode;
-      const validModes = ideSupportsDebugMode() ? ["ask", "code", "plan", "debug"] : ["ask", "code", "plan"];
+      const ide = this.ideFor(channelId);
+      const validModes = ideSupportsDebugMode(ide) ? ["ask", "code", "plan", "debug"] : ["ask", "code", "plan"];
       if (!validModes.includes(mode)) {
         return `模式无效。请使用：/mode ${validModes.join("|")}`;
       }
-      return TextSecurityGuard.sanitizeOutbound(await this.bridge.switchMode(mode));
+      return TextSecurityGuard.sanitizeOutbound(await this.bridge.switchMode(mode, ide));
     }
     if (value === "/newchat") {
       // Allow raw output so diagnostic fields (e.g., new chat candidates) are visible to the user
-      return await this.bridge.newChat();
+      return await this.bridge.newChat(this.ideFor(channelId));
     }
     if (value === "/context") {
-      return TextSecurityGuard.sanitizeOutbound(await this.bridge.contextStatus());
+      return TextSecurityGuard.sanitizeOutbound(await this.bridge.contextStatus(this.ideFor(channelId)));
     }
     if (value === "/usage") {
-      return TextSecurityGuard.sanitizeOutbound(await this.bridge.usageStatus());
+      return TextSecurityGuard.sanitizeOutbound(await this.bridge.usageStatus(this.ideFor(channelId)));
     }
     if (value === "/restart") {
       return TextSecurityGuard.sanitizeOutbound(await this.bridge.restart());
     }
     if (value === "/diag") {
       // Allow raw diagnostics output (no redaction) for troubleshooting
-      return await this.bridge.diagnostics();
+      return await this.bridge.diagnostics(this.ideFor(channelId));
     }
     if (value === "/chats" || value === "/targets") {
-      return TextSecurityGuard.sanitizeOutbound(await this.bridge.listChats());
+      return TextSecurityGuard.sanitizeOutbound(await this.bridge.listChats(this.ideFor(channelId)));
     }
     if (value.startsWith("/target")) {
-      const arg = value.replace("/target", "").trim().toLowerCase();
-      if (!arg) {
-        return TextSecurityGuard.sanitizeOutbound(await this.bridge.targetStatus());
-      }
-      if (arg === "auto") {
-        return TextSecurityGuard.sanitizeOutbound(await this.bridge.selectTarget("auto"));
-      }
-      const index = Number(arg);
-      if (!Number.isInteger(index) || index <= 0) {
-        return "目标无效。请使用 /target <序号> 或 /target auto。";
-      }
-      return TextSecurityGuard.sanitizeOutbound(await this.bridge.selectTarget(index));
+      return await this.handleTarget(channelId, value);
     }
     if (value === "/queue") {
       const pending = this.pendingAttachmentByChannel.get(channelId);
@@ -154,7 +147,7 @@ export class CommandRouter {
       return this.cancel(channelId);
     }
     if (value === "/last") {
-      const latest = await this.bridge.latestResponse();
+      const latest = await this.bridge.latestResponse(this.ideFor(channelId));
       if (latest) {
         return TextSecurityGuard.sanitizeOutbound(latest);
       }
@@ -184,7 +177,7 @@ export class CommandRouter {
   }
 
   private async handleChoose(channelId: string, text: string, options?: SendPromptOptions): Promise<string> {
-    const latest = (await this.bridge.latestResponse())
+    const latest = (await this.bridge.latestResponse(this.ideFor(channelId)))
       ?? this.stateStore.getLastDelivered(this.channelKeyToNumber(channelId))?.text;
     if (!latest) {
       return "当前没有待回答的助手问题。可先发送 /last 查看上一条回复。";
@@ -239,9 +232,10 @@ export class CommandRouter {
         relayOptions.signal = options.signal;
       }
       const pending = this.takePendingAttachment(channelId);
+      const ide = this.ideFor(channelId);
       const response = pending
-        ? await this.bridge.relayPromptForPendingAttachment(prompt, pending.kind, pending.fileName, relayOptions)
-        : await this.bridge.relayPrompt(prompt, relayOptions);
+        ? await this.bridge.relayPromptForPendingAttachment(prompt, pending.kind, pending.fileName, relayOptions, ide)
+        : await this.bridge.relayPrompt(prompt, relayOptions, ide);
       this.stateStore.recordDelivered(this.channelKeyToNumber(channelId), response, requestId, Date.now());
       this.progressByChannel.delete(channelId);
       this.activeRequestByChannel.delete(channelId);
@@ -300,6 +294,36 @@ export class CommandRouter {
     );
   }
 
+  ideLabel(channelId: string): string {
+    return ideDisplayName(this.ideFor(channelId));
+  }
+
+  private ideFor(channelId: string): IdeTarget {
+    return this.ideByChannel.get(channelId) ?? config.bridgeIdeTarget;
+  }
+
+  private async handleTarget(channelId: string, value: string): Promise<string> {
+    const arg = value.replace("/target", "").trim().toLowerCase();
+    const current = this.ideFor(channelId);
+    if (!arg) {
+      return TextSecurityGuard.sanitizeOutbound(await this.bridge.targetStatus(current));
+    }
+    if (arg === "auto") {
+      const result = await this.bridge.selectRoutedTarget("auto", current);
+      this.ideByChannel.delete(channelId);
+      return TextSecurityGuard.sanitizeOutbound(result.text);
+    }
+    const index = Number(arg);
+    if (!Number.isInteger(index) || index <= 0) {
+      return "目标无效。请使用 /target <序号> 或 /target auto。";
+    }
+    const result = await this.bridge.selectRoutedTarget(index, current);
+    if (result.ide) {
+      this.ideByChannel.set(channelId, result.ide);
+    }
+    return TextSecurityGuard.sanitizeOutbound(result.text);
+  }
+
   private channelKeyToNumber(channelId: string): number {
     let hash = 0;
     for (let i = 0; i < channelId.length; i += 1) {
@@ -308,10 +332,11 @@ export class CommandRouter {
     return hash;
   }
 
-  private helpText(): string {
+  private helpText(channelId: string): string {
+    const ide = this.ideFor(channelId);
     return [
-      "Courier 命令：",
-      ideSupportsDebugMode() ? "/mode ask|code|plan|debug  切换模式" : "/mode ask|code|plan  切换模式",
+      `Courier 命令（当前 ${ideDisplayName(ide)}）：`,
+      ideSupportsDebugMode(ide) ? "/mode ask|code|plan|debug  切换模式" : "/mode ask|code|plan  切换模式",
       "/model [模型名]  查看或切换模型",
       "/newchat  新开 IDE 对话",
       "/context  Context 用量",
@@ -322,9 +347,8 @@ export class CommandRouter {
       "/last  上一条助手回复",
       "/choose A|B|C|D [自定义]  回答助手提问",
       "/history [条数|clear]  历史记录",
-      "/chats  列出 IDE 目标",
-      "/targets  同 /chats",
-      "/target <序号>|auto  选择目标",
+      "/chats 或 /targets  列出各 IDE 已打开的窗口",
+      "/target <序号>|auto  把当前对话发到这个窗口，或改回自动",
       "/diag  诊断",
       "/whoami  查看 QQ openid，或企业微信智能机器人 userid",
       "/queue  查看待发送的图片或文件",

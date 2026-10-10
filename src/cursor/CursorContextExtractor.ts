@@ -1,6 +1,6 @@
 import { ContextReading } from "../types";
 import { logger } from "../logger";
-import { config } from "../config";
+import { config, IdeTarget } from "../config";
 import { BaseCdpClient, ClientDomains } from "../cdp/BaseCdpClient";
 import { CursorCdpClient } from "./CursorCdpClient";
 import { WindsurfCdpClient } from "../windsurf/WindsurfCdpClient";
@@ -9,17 +9,17 @@ import { CodexCdpClient } from "../codex/CodexCdpClient";
 import sharp from "sharp";
 import { recognize } from "tesseract.js";
 
-function createCdpClientForContext(): BaseCdpClient {
-  if (config.bridgeIdeTarget === "windsurf") return new WindsurfCdpClient();
-  if (config.bridgeIdeTarget === "vscode") return new VscodeCdpClient();
-  if (config.bridgeIdeTarget === "codex") return new CodexCdpClient();
+function createCdpClientForContext(ide: IdeTarget): BaseCdpClient {
+  if (ide === "windsurf") return new WindsurfCdpClient();
+  if (ide === "vscode") return new VscodeCdpClient();
+  if (ide === "codex") return new CodexCdpClient();
   return new CursorCdpClient();
 }
 
-function contextSelectorForIde(): string {
-  if (config.bridgeIdeTarget === "windsurf") return config.windsurfContextSelector;
-  if (config.bridgeIdeTarget === "vscode") return config.vscodeContextSelector;
-  if (config.bridgeIdeTarget === "codex") return "";
+function contextSelectorForIde(ide: IdeTarget): string {
+  if (ide === "windsurf") return config.windsurfContextSelector;
+  if (ide === "vscode") return config.vscodeContextSelector;
+  if (ide === "codex") return "";
   return config.cursorContextSelector;
 }
 
@@ -29,7 +29,13 @@ function contextSelectorForIde(): string {
  * IDE-aware: works for Cursor, Windsurf, and VS Code.
  */
 export class CursorContextExtractor {
-  private readonly cdp = createCdpClientForContext();
+  private readonly cdp: BaseCdpClient;
+  private readonly contextSelector: string;
+
+  constructor(ide: IdeTarget = config.bridgeIdeTarget) {
+    this.cdp = createCdpClientForContext(ide);
+    this.contextSelector = contextSelectorForIde(ide);
+  }
 
   async readContextPercentage(): Promise<ContextReading> {
     const domResult = await this.readFromDom();
@@ -116,7 +122,7 @@ export class CursorContextExtractor {
   }
 
   private async extractDomPercent(client: ClientDomains): Promise<ContextReading | null> {
-    const selectorLiteral = JSON.stringify(contextSelectorForIde());
+    const selectorLiteral = JSON.stringify(this.contextSelector);
     const result = await this.cdp.evaluateJson<{ percent: number | null; note?: string; confidence?: number }>(
       client,
       `

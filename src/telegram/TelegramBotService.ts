@@ -3,7 +3,7 @@ import type { Message, CallbackQuery, InlineKeyboardMarkup } from "grammy/types"
 import { mkdirSync, writeFileSync } from "node:fs";
 import { access } from "node:fs/promises";
 import { basename, join } from "node:path";
-import { config, ideDisplayName, ideSupportsDebugMode } from "../config";
+import { config, IdeTarget, ideDisplayName, ideSupportsDebugMode } from "../config";
 import { logger } from "../logger";
 import { BridgeService } from "../bridge/BridgeService";
 import { BridgeMode } from "../types";
@@ -17,6 +17,7 @@ export class TelegramBotService {
   private nextRequestId = 1;
   private readonly latestDeliveredByChat = new Map<number, { requestId: number; text: string; at: number }>();
   private readonly activeRequestByChat = new Map<number, number>();
+  private readonly ideByChat = new Map<number, IdeTarget>();
   private readonly requestProgressByChat = new Map<number, { requestId: number; phase: string; startedAt: number; updatedAt: number }>();
   private readonly lastPromptByChat = new Map<number, { prompt: string; at: number }>();
   private readonly pendingAssistantQuestionByChat = new Map<number, { text: string; at: number; source: "live" | "cache" | "persisted" }>();
@@ -147,16 +148,17 @@ export class TelegramBotService {
     const pendingAttachment = this.dequeuePendingAttachment(msg.chat.id);
 
     if (text === "/models") {
-      await this.sendText(msg.chat.id, await this.withTimeout(this.bridge.listModels(), "Model listing timed out."));
+      await this.sendText(msg.chat.id, await this.withTimeout(this.bridge.listModels(this.ideFor(msg.chat.id)), "Model listing timed out."));
       return;
     }
 
     if (text.startsWith("/model")) {
       const modelArg = text.replace("/model", "").trim();
+      const ide = this.ideFor(msg.chat.id);
       if (!modelArg) {
-        await this.sendText(msg.chat.id, await this.withTimeout(this.bridge.getModel(), "Model detection timed out."));
+        await this.sendText(msg.chat.id, await this.withTimeout(this.bridge.getModel(ide), "Model detection timed out."));
       } else {
-        await this.sendText(msg.chat.id, await this.withTimeout(this.bridge.setModel(modelArg), "Model switch timed out."));
+        await this.sendText(msg.chat.id, await this.withTimeout(this.bridge.setModel(modelArg, ide), "Model switch timed out."));
       }
       return;
     }
@@ -182,7 +184,7 @@ export class TelegramBotService {
     }
 
     if (text === "/newchat") {
-      const status = await this.bridge.newChat();
+      const status = await this.bridge.newChat(this.ideFor(msg.chat.id));
       if (this.shouldResetStateAfterNewChat(status)) {
         this.resetChatState(msg.chat.id);
       }
@@ -191,12 +193,12 @@ export class TelegramBotService {
     }
 
     if (text === "/context") {
-      await this.sendText(msg.chat.id, await this.withTimeout(this.bridge.contextStatus(), "Context request timed out."));
+      await this.sendText(msg.chat.id, await this.withTimeout(this.bridge.contextStatus(this.ideFor(msg.chat.id)), "Context request timed out."));
       return;
     }
 
     if (text === "/usage") {
-      await this.sendText(msg.chat.id, await this.withTimeout(this.bridge.usageStatus(), "Usage request timed out."));
+      await this.sendText(msg.chat.id, await this.withTimeout(this.bridge.usageStatus(this.ideFor(msg.chat.id)), "Usage request timed out."));
       return;
     }
 
@@ -241,12 +243,12 @@ export class TelegramBotService {
     }
 
     if (text === "/chats") {
-      await this.sendText(msg.chat.id, await this.bridge.listChats());
+      await this.sendText(msg.chat.id, await this.bridge.listChats(this.ideFor(msg.chat.id)));
       return;
     }
 
     if (text === "/targets") {
-      await this.sendText(msg.chat.id, await this.bridge.listChats());
+      await this.sendText(msg.chat.id, await this.bridge.listChats(this.ideFor(msg.chat.id)));
       return;
     }
 
@@ -256,7 +258,7 @@ export class TelegramBotService {
     }
 
     if (text === "/diag") {
-      await this.sendText(msg.chat.id, await this.bridge.diagnostics(), { sanitize: false });
+      await this.sendText(msg.chat.id, await this.bridge.diagnostics(this.ideFor(msg.chat.id)), { sanitize: false });
       return;
     }
 
@@ -266,12 +268,12 @@ export class TelegramBotService {
     }
 
     if (text === "/help all") {
-      await this.sendText(msg.chat.id, this.helpTextAll(), { reply_markup: this.quickActionsKeyboard() });
+      await this.sendText(msg.chat.id, this.helpTextAll(msg.chat.id), { reply_markup: this.quickActionsKeyboard() });
       return;
     }
 
     if (text === "/start" || text === "/help") {
-      await this.sendText(msg.chat.id, this.helpTextCompact(), { reply_markup: this.quickActionsKeyboard() });
+      await this.sendText(msg.chat.id, this.helpTextCompact(msg.chat.id), { reply_markup: this.quickActionsKeyboard() });
       return;
     }
 
@@ -301,7 +303,7 @@ export class TelegramBotService {
     }
 
     if (command === "/models") {
-      await this.sendText(chatId, await this.withTimeout(this.bridge.listModels(), "Model listing timed out."));
+      await this.sendText(chatId, await this.withTimeout(this.bridge.listModels(this.ideFor(chatId)), "Model listing timed out."));
       return;
     }
 
@@ -315,7 +317,7 @@ export class TelegramBotService {
       return;
     }
     if (command === "/newchat") {
-      const status = await this.bridge.newChat();
+      const status = await this.bridge.newChat(this.ideFor(chatId));
       if (this.shouldResetStateAfterNewChat(status)) {
         this.resetChatState(chatId);
       }
@@ -323,11 +325,11 @@ export class TelegramBotService {
       return;
     }
     if (command === "/context") {
-      await this.sendText(chatId, await this.withTimeout(this.bridge.contextStatus(), "Context request timed out."));
+      await this.sendText(chatId, await this.withTimeout(this.bridge.contextStatus(this.ideFor(chatId)), "Context request timed out."));
       return;
     }
     if (command === "/usage") {
-      await this.sendText(chatId, await this.withTimeout(this.bridge.usageStatus(), "Usage request timed out."));
+      await this.sendText(chatId, await this.withTimeout(this.bridge.usageStatus(this.ideFor(chatId)), "Usage request timed out."));
       return;
     }
     if (command === "/queue") {
@@ -364,7 +366,7 @@ export class TelegramBotService {
       return;
     }
     if (command === "/targets") {
-      await this.sendText(chatId, await this.bridge.listChats());
+      await this.sendText(chatId, await this.bridge.listChats(this.ideFor(chatId)));
       return;
     }
     if (command === "/last") {
@@ -372,15 +374,16 @@ export class TelegramBotService {
       return;
     }
     if (command === "/help") {
-      await this.sendText(chatId, this.helpTextCompact(), { reply_markup: this.quickActionsKeyboard() });
+      await this.sendText(chatId, this.helpTextCompact(chatId), { reply_markup: this.quickActionsKeyboard() });
     }
   }
 
-  private helpTextCompact(): string {
-    const ide = ideDisplayName();
-    const modeHelp = ideSupportsDebugMode() ? "ask|code|plan|debug" : "ask|code|plan";
+  private helpTextCompact(chatId?: number): string {
+    const selected = chatId === undefined ? config.bridgeIdeTarget : this.ideFor(chatId);
+    const ide = ideDisplayName(selected);
+    const modeHelp = ideSupportsDebugMode(selected) ? "ask|code|plan|debug" : "ask|code|plan";
     const vscodeNote =
-      config.bridgeIdeTarget === "vscode"
+      selected === "vscode"
         ? "- VS Code mode/new-chat only report success when confirmed; otherwise they return explicit unverified/failed status."
         : null;
     return [
@@ -391,7 +394,7 @@ export class TelegramBotService {
       `- \`/mode ${modeHelp}\` switch working mode`,
       "- `/queue` view pending attachments",
       "- `/last` show the last AI reply",
-      "- `/targets` list chat targets",
+      "- `/targets` list open windows across Cursor, Codex, Windsurf, and VS Code",
       "- `/resume` continue from where we left off",
       "",
       "## Common Commands",
@@ -408,11 +411,12 @@ export class TelegramBotService {
     ].join("\n");
   }
 
-  private helpTextAll(): string {
-    const ide = ideDisplayName();
-    const modeHelp = ideSupportsDebugMode() ? "ask|code|plan|debug" : "ask|code|plan";
+  private helpTextAll(chatId?: number): string {
+    const selected = chatId === undefined ? config.bridgeIdeTarget : this.ideFor(chatId);
+    const ide = ideDisplayName(selected);
+    const modeHelp = ideSupportsDebugMode(selected) ? "ask|code|plan|debug" : "ask|code|plan";
     const vscodeBoundaryNote =
-      config.bridgeIdeTarget === "vscode"
+      selected === "vscode"
         ? "- VS Code mode/new-chat use strict confirmation semantics: switched only on exact Ask/Agent/Plan or new-chat signal; otherwise explicit unverified/failed."
         : null;
     return [
@@ -431,8 +435,8 @@ export class TelegramBotService {
       "- `/context` show context estimate",
       "- `/usage` show usage diagnostics",
       "- `/progress` show active request progress",
-      "- `/targets` list available targets",
-      "- `/target <index>|auto` pin or unpin target",
+      "- `/targets` list open windows across IDEs",
+      "- `/target <index>|auto` send this chat to that window, or return to automatic selection",
       "- `/chats` alias for target list/status",
       "- `/diag` show bridge diagnostics",
       "",
@@ -503,7 +507,7 @@ export class TelegramBotService {
   }
 
   private async handleLastCommand(chatId: number): Promise<void> {
-    const latest = await this.bridge.latestResponse();
+    const latest = await this.bridge.latestResponse(this.ideFor(chatId));
     const cached = this.latestDeliveredByChat.get(chatId);
     const stored = this.stateStore.getLastDelivered(chatId);
     const lastPrompt = this.lastPromptByChat.get(chatId)?.prompt ?? this.stateStore.getLastPrompt(chatId)?.prompt ?? null;
@@ -582,7 +586,7 @@ export class TelegramBotService {
     if (msg.caption?.trim()) {
       photoOptions.prompt = msg.caption.trim();
     }
-    const status = await this.bridge.injectPhoto(downloadedPath, photoOptions);
+    const status = await this.bridge.injectPhoto(downloadedPath, photoOptions, this.ideFor(msg.chat.id));
     const hasCaption = Boolean(msg.caption?.trim());
     if (!hasCaption && status.includes("Type your prompt and send manually")) {
       this.enqueuePendingAttachment(msg.chat.id, { kind: "photo", createdAt: Date.now() });
@@ -615,7 +619,7 @@ export class TelegramBotService {
     if (msg.caption?.trim()) {
       attachOptions.prompt = msg.caption.trim();
     }
-    const status = await this.bridge.injectDocument(downloadedPath, attachOptions);
+    const status = await this.bridge.injectDocument(downloadedPath, attachOptions, this.ideFor(msg.chat.id));
     const hasCaption = Boolean(msg.caption?.trim());
     if (!hasCaption && status.includes("Type your prompt and send manually")) {
       const pending: { kind: "photo" | "document"; createdAt: number; fileName?: string } = {
@@ -662,7 +666,7 @@ export class TelegramBotService {
     if (attachParsed.prompt) {
       attachCommandOptions.prompt = attachParsed.prompt;
     }
-    const status = await this.bridge.injectDocument(attachParsed.path, attachCommandOptions);
+    const status = await this.bridge.injectDocument(attachParsed.path, attachCommandOptions, this.ideFor(chatId));
     if (!attachParsed.prompt && status.includes("Type your prompt and send manually")) {
       this.enqueuePendingAttachment(chatId, {
         kind: "document",
@@ -706,24 +710,32 @@ export class TelegramBotService {
 
   private async handleModeCommand(chatId: number, text: string): Promise<void> {
     const mode = text.replace("/mode", "").trim().toLowerCase() as BridgeMode;
-    const validModes = ideSupportsDebugMode() ? ["ask", "code", "plan", "debug"] : ["ask", "code", "plan"];
+    const ide = this.ideFor(chatId);
+    const validModes = ideSupportsDebugMode(ide) ? ["ask", "code", "plan", "debug"] : ["ask", "code", "plan"];
     if (!validModes.includes(mode)) {
       await this.sendText(chatId, `Invalid mode. Use: /mode ${validModes.join("|")}`);
       return;
     }
 
-    await this.sendText(chatId, await this.bridge.switchMode(mode));
+    await this.sendText(chatId, await this.bridge.switchMode(mode, this.ideFor(chatId)));
+  }
+
+  private ideFor(chatId: number): IdeTarget {
+    return this.ideByChat.get(chatId) ?? config.bridgeIdeTarget;
   }
 
   private async handleTargetCommand(chatId: number, text: string): Promise<void> {
     const arg = text.replace("/target", "").trim().toLowerCase();
+    const current = this.ideFor(chatId);
     if (!arg) {
-      await this.sendText(chatId, await this.bridge.targetStatus());
+      await this.sendText(chatId, await this.bridge.targetStatus(current));
       return;
     }
 
     if (arg === "auto") {
-      await this.sendText(chatId, await this.bridge.selectTarget("auto"));
+      const result = await this.bridge.selectRoutedTarget("auto", current);
+      this.ideByChat.delete(chatId);
+      await this.sendText(chatId, result.text);
       return;
     }
 
@@ -733,7 +745,11 @@ export class TelegramBotService {
       return;
     }
 
-    await this.sendText(chatId, await this.bridge.selectTarget(index));
+    const result = await this.bridge.selectRoutedTarget(index, current);
+    if (result.ide) {
+      this.ideByChat.set(chatId, result.ide);
+    }
+    await this.sendText(chatId, result.text);
   }
 
   private async withTimeout(task: Promise<string>, timeoutMessage: string): Promise<string> {
@@ -954,10 +970,11 @@ export class TelegramBotService {
       startedAt,
       updatedAt: startedAt
     });
-    const baselineSnippet = await this.bridge.latestResponse();
+    const ide = this.ideFor(chatId);
+    const baselineSnippet = await this.bridge.latestResponse(ide);
     const relayTask = pendingAttachmentKind
-      ? this.bridge.relayPromptForPendingAttachment(prompt, pendingAttachmentKind, pendingAttachmentFileName)
-      : this.bridge.relayPrompt(prompt);
+      ? this.bridge.relayPromptForPendingAttachment(prompt, pendingAttachmentKind, pendingAttachmentFileName, undefined, ide)
+      : this.bridge.relayPrompt(prompt, undefined, ide);
     const timeoutMs = config.telegramRequestTimeoutMs;
 
     const first = await Promise.race([
@@ -977,7 +994,7 @@ export class TelegramBotService {
           startedAt,
           updatedAt: Date.now()
         });
-        await this.sendDelayedFollowup(chatId, requestId, baselineSnippet, 45000);
+        await this.sendDelayedFollowup(chatId, requestId, baselineSnippet, 45000, ide);
       } else {
         this.requestProgressByChat.delete(chatId);
         if (this.activeRequestByChat.get(chatId) === requestId) {
@@ -1017,7 +1034,7 @@ export class TelegramBotService {
         startedAt,
         updatedAt: Date.now()
       });
-      await this.sendDelayedFollowup(chatId, requestId, baselineSnippet, 45000);
+      await this.sendDelayedFollowup(chatId, requestId, baselineSnippet, 45000, ide);
     } catch (error) {
       logger.warn({ error }, "Relay follow-up failed");
       await this.sendText(chatId, "Request failed while waiting for delayed follow-up.");
@@ -1032,7 +1049,8 @@ export class TelegramBotService {
     chatId: number,
     requestId: number,
     baselineSnippet: string | null,
-    maxWaitMs: number
+    maxWaitMs: number,
+    ide: IdeTarget
   ): Promise<void> {
     const start = Date.now();
     while (Date.now() - start < maxWaitMs) {
@@ -1041,7 +1059,7 @@ export class TelegramBotService {
         // A newer request exists for this chat, so stop stale follow-up.
         return;
       }
-      const latest = await this.bridge.latestResponse();
+      const latest = await this.bridge.latestResponse(ide);
       if (
         latest &&
         latest.trim().length >= 8 &&

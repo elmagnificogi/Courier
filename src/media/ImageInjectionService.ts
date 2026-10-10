@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 import { lookup as lookupMime } from "mime-types";
 import { BridgeResponse } from "../types";
 import { logger } from "../logger";
-import { config, ideDisplayName } from "../config";
+import { config, IdeTarget, ideDisplayName } from "../config";
 import { CodexCdpClient } from "../codex/CodexCdpClient";
 import { BaseCdpClient } from "../cdp/BaseCdpClient";
 import { CursorCdpClient } from "../cursor/CursorCdpClient";
@@ -14,23 +14,37 @@ import { VscodeCdpClient } from "../vscode/VscodeCdpClient";
 
 const execAsync = promisify(exec);
 
-function createCdpClientForInjection(): BaseCdpClient {
-  if (config.bridgeIdeTarget === "windsurf") return new WindsurfCdpClient();
-  if (config.bridgeIdeTarget === "vscode") return new VscodeCdpClient();
-  if (config.bridgeIdeTarget === "codex") return new CodexCdpClient();
+function createCdpClientForInjection(ide: IdeTarget): BaseCdpClient {
+  if (ide === "windsurf") return new WindsurfCdpClient();
+  if (ide === "vscode") return new VscodeCdpClient();
+  if (ide === "codex") return new CodexCdpClient();
   return new CursorCdpClient();
 }
 
-function chatInputSelectorForIde(): string {
-  if (config.bridgeIdeTarget === "windsurf") return config.windsurfChatInputSelector;
-  if (config.bridgeIdeTarget === "vscode") return config.vscodeChatInputSelector;
-  if (config.bridgeIdeTarget === "codex") return config.codexChatInputSelector;
+function chatInputSelectorForIde(ide: IdeTarget): string {
+  if (ide === "windsurf") return config.windsurfChatInputSelector;
+  if (ide === "vscode") return config.vscodeChatInputSelector;
+  if (ide === "codex") return config.codexChatInputSelector;
   return config.cursorChatInputSelector;
 }
 
 
 export class ImageInjectionService {
-  private readonly cdp = createCdpClientForInjection();
+  private readonly ide: IdeTarget;
+  private readonly cdp: BaseCdpClient;
+
+  constructor(ide: IdeTarget = config.bridgeIdeTarget) {
+    this.ide = ide;
+    this.cdp = createCdpClientForInjection(ide);
+  }
+
+  private chatInputSelector(): string {
+    return chatInputSelectorForIde(this.ide);
+  }
+
+  private ideName(): string {
+    return ideDisplayName(this.ide);
+  }
 
   async injectPhotoFromTelegramFile(
     filePath: string,
@@ -85,8 +99,8 @@ export class ImageInjectionService {
             return {
               text:
                 kind === "photo"
-                  ? `Image added in ${ideDisplayName()} composer. Type your prompt and send manually.`
-                  : `Document added in ${ideDisplayName()} composer. Type your prompt and send manually.`,
+                  ? `Image added in ${this.ideName()} composer. Type your prompt and send manually.`
+                  : `Document added in ${this.ideName()} composer. Type your prompt and send manually.`,
               metadata: { status: "injected-manual", submit_method: "manual" }
             };
           }
@@ -99,15 +113,15 @@ export class ImageInjectionService {
           return {
             text:
               kind === "photo"
-                ? `Image added in ${ideDisplayName()} composer. Type your prompt and send manually.`
-                : `Document added in ${ideDisplayName()} composer. Type your prompt and send manually.`,
+                ? `Image added in ${this.ideName()} composer. Type your prompt and send manually.`
+                : `Document added in ${this.ideName()} composer. Type your prompt and send manually.`,
             metadata: { status: "injected-manual", submit_method: keyboardFirst.submitMethod ?? "manual" }
           };
         }
       }
 
       const injected = await this.cdp.withClient(async (client) => {
-        const selectorLiteral = JSON.stringify(chatInputSelectorForIde());
+        const selectorLiteral = JSON.stringify(this.chatInputSelector());
         const shouldInjectPromptLiteral = JSON.stringify(shouldInjectPrompt);
         const shouldAttemptSubmitLiteral = JSON.stringify(shouldAttemptSubmit);
         const promptLiteral = JSON.stringify(prompt);
@@ -425,7 +439,7 @@ export class ImageInjectionService {
                   const style = window.getComputedStyle(el);
                   return rect.width > 3 && rect.height > 3 && style.visibility !== 'hidden' && style.display !== 'none';
                 };
-                const configured = ${JSON.stringify(chatInputSelectorForIde())};
+                const configured = ${JSON.stringify(this.chatInputSelector())};
                 if (configured) {
                   const explicit = document.querySelector(configured);
                   if (explicit && isVisible(explicit)) {
@@ -459,8 +473,8 @@ export class ImageInjectionService {
           return {
             text:
               kind === "photo"
-                ? `Image added in ${ideDisplayName()} composer via keyboard fallback (Ctrl+V). Send prompt text next.`
-                : `Document added in ${ideDisplayName()} composer via keyboard fallback (Ctrl+V). Send prompt text next.`,
+                ? `Image added in ${this.ideName()} composer via keyboard fallback (Ctrl+V). Send prompt text next.`
+                : `Document added in ${this.ideName()} composer via keyboard fallback (Ctrl+V). Send prompt text next.`,
             metadata: { status: "injected-manual", submit_method: keyboardFallback.method }
           };
         }
@@ -490,8 +504,8 @@ export class ImageInjectionService {
         return {
           text:
             kind === "photo"
-              ? `Image added in ${ideDisplayName()} composer. Type your prompt and send manually.`
-              : `Document added in ${ideDisplayName()} composer. Type your prompt and send manually.`,
+              ? `Image added in ${this.ideName()} composer. Type your prompt and send manually.`
+              : `Document added in ${this.ideName()} composer. Type your prompt and send manually.`,
           metadata: {
             status: "injected-manual",
             submit_method: "manual"
@@ -508,8 +522,8 @@ export class ImageInjectionService {
       return {
         text:
           kind === "photo"
-            ? `Image injection failed through CDP. Manual paste in ${ideDisplayName()} may be required.`
-            : `Document injection failed through CDP. Manual attach in ${ideDisplayName()} may be required.`,
+            ? `Image injection failed through CDP. Manual paste in ${this.ideName()} may be required.`
+            : `Document injection failed through CDP. Manual attach in ${this.ideName()} may be required.`,
         metadata: { status: "failed" }
       };
     }
@@ -537,7 +551,7 @@ export class ImageInjectionService {
                 const style = window.getComputedStyle(el);
                 return rect.width > 3 && rect.height > 3 && style.visibility !== 'hidden' && style.display !== 'none';
               };
-              const configured = ${JSON.stringify(chatInputSelectorForIde())};
+              const configured = ${JSON.stringify(this.chatInputSelector())};
               if (configured) {
                 const explicit = document.querySelector(configured);
                 if (explicit && isVisible(explicit)) {
@@ -624,7 +638,7 @@ export class ImageInjectionService {
                 const style = window.getComputedStyle(el);
                 return rect.width > 3 && rect.height > 3 && style.visibility !== 'hidden' && style.display !== 'none';
               };
-              const configured = ${JSON.stringify(chatInputSelectorForIde())};
+              const configured = ${JSON.stringify(this.chatInputSelector())};
               let inputEl = null;
               if (configured) {
                 const explicit = document.querySelector(configured);
@@ -680,7 +694,7 @@ export class ImageInjectionService {
                 const style = window.getComputedStyle(el);
                 return rect.width > 3 && rect.height > 3 && style.visibility !== 'hidden' && style.display !== 'none';
               };
-              const configured = ${JSON.stringify(chatInputSelectorForIde())};
+              const configured = ${JSON.stringify(this.chatInputSelector())};
               let inputEl = null;
               if (configured) {
                 const explicit = document.querySelector(configured);
@@ -764,7 +778,7 @@ export class ImageInjectionService {
                 const style = window.getComputedStyle(el);
                 return rect.width > 3 && rect.height > 3 && style.visibility !== 'hidden' && style.display !== 'none';
               };
-              const configured = ${JSON.stringify(chatInputSelectorForIde())};
+              const configured = ${JSON.stringify(this.chatInputSelector())};
               if (configured) {
                 const explicit = document.querySelector(configured);
                 if (explicit && isVisible(explicit)) {
@@ -823,7 +837,7 @@ export class ImageInjectionService {
                 const style = window.getComputedStyle(el);
                 return rect.width > 3 && rect.height > 3 && style.visibility !== 'hidden' && style.display !== 'none';
               };
-              const configured = ${JSON.stringify(chatInputSelectorForIde())};
+              const configured = ${JSON.stringify(this.chatInputSelector())};
               if (configured) {
                 const explicit = document.querySelector(configured);
                 if (explicit && isVisible(explicit)) {
