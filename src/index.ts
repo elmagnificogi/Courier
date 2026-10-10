@@ -1,6 +1,6 @@
 import { startHealthServer } from "./health/HealthServer";
 import { TelegramBotService } from "./telegram/TelegramBotService";
-import { config, enabledAdapterNames } from "./config";
+import { config, enabledAdapterNames, ideDisplayName } from "./config";
 import { logger } from "./logger";
 import { DiscordService } from "./platform/DiscordService";
 import { EmailService } from "./platform/EmailService";
@@ -15,8 +15,7 @@ async function main(): Promise<void> {
   discord.start();
   email.start();
   startHealthServer();
-  const ideName =
-    config.bridgeIdeTarget === "windsurf" ? "Windsurf" : config.bridgeIdeTarget === "vscode" ? "VS Code" : "Cursor";
+  const ideName = ideDisplayName();
   logger.info(
     `${ideName} multi-platform bridge started (target=${config.bridgeIdeTarget}, port=${config.port}, adapters=${enabledAdapterNames().join(",")})`
   );

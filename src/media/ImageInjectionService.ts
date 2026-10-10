@@ -5,7 +5,8 @@ import { promisify } from "node:util";
 import { lookup as lookupMime } from "mime-types";
 import { BridgeResponse } from "../types";
 import { logger } from "../logger";
-import { config } from "../config";
+import { config, ideDisplayName } from "../config";
+import { CodexCdpClient } from "../codex/CodexCdpClient";
 import { BaseCdpClient } from "../cdp/BaseCdpClient";
 import { CursorCdpClient } from "../cursor/CursorCdpClient";
 import { WindsurfCdpClient } from "../windsurf/WindsurfCdpClient";
@@ -16,20 +17,17 @@ const execAsync = promisify(exec);
 function createCdpClientForInjection(): BaseCdpClient {
   if (config.bridgeIdeTarget === "windsurf") return new WindsurfCdpClient();
   if (config.bridgeIdeTarget === "vscode") return new VscodeCdpClient();
+  if (config.bridgeIdeTarget === "codex") return new CodexCdpClient();
   return new CursorCdpClient();
 }
 
 function chatInputSelectorForIde(): string {
   if (config.bridgeIdeTarget === "windsurf") return config.windsurfChatInputSelector;
   if (config.bridgeIdeTarget === "vscode") return config.vscodeChatInputSelector;
+  if (config.bridgeIdeTarget === "codex") return config.codexChatInputSelector;
   return config.cursorChatInputSelector;
 }
 
-function ideDisplayName(): string {
-  if (config.bridgeIdeTarget === "windsurf") return "Windsurf";
-  if (config.bridgeIdeTarget === "vscode") return "VS Code";
-  return "Cursor";
-}
 
 export class ImageInjectionService {
   private readonly cdp = createCdpClientForInjection();

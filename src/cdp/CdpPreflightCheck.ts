@@ -2,6 +2,7 @@ import { BaseCdpClient, ClientDomains } from "./BaseCdpClient";
 import { CursorCdpClient } from "../cursor/CursorCdpClient";
 import { WindsurfCdpClient } from "../windsurf/WindsurfCdpClient";
 import { VscodeCdpClient } from "../vscode/VscodeCdpClient";
+import { CodexCdpClient } from "../codex/CodexCdpClient";
 import { config } from "../config";
 import { logger } from "../logger";
 
@@ -22,7 +23,7 @@ export interface DiscoveredCandidate {
 }
 
 export interface PreflightReport {
-  ide: "cursor" | "windsurf" | "vscode";
+  ide: "cursor" | "windsurf" | "vscode" | "codex";
   cdpUrl: string;
   connectivity: {
     reachable: boolean;
@@ -48,6 +49,7 @@ export interface PreflightReport {
 function createCdpClient(): BaseCdpClient {
   if (config.bridgeIdeTarget === "windsurf") return new WindsurfCdpClient();
   if (config.bridgeIdeTarget === "vscode") return new VscodeCdpClient();
+  if (config.bridgeIdeTarget === "codex") return new CodexCdpClient();
   return new CursorCdpClient();
 }
 
@@ -64,6 +66,13 @@ function getConfiguredSelectors(): { chatInput: string; response: string; mode: 
       chatInput: config.vscodeChatInputSelector,
       response: config.vscodeResponseSelector,
       mode: config.vscodeModeSelector
+    };
+  }
+  if (config.bridgeIdeTarget === "codex") {
+    return {
+      chatInput: config.codexChatInputSelector,
+      response: config.codexResponseSelector,
+      mode: ""
     };
   }
   return {
@@ -219,6 +228,8 @@ async function discoverModeIndicatorCandidates(
     ? "write|chat|plan"
     : config.bridgeIdeTarget === "vscode"
       ? "chat|ask|agent|edit|plan|debug|code"
+      : config.bridgeIdeTarget === "codex"
+        ? "ask|agent|plan|codex"
     : "agent|code|ask|debug|plan";
   const raw = await cdp.evaluateJson<DiscoveredCandidate[]>(
     client,
@@ -257,13 +268,15 @@ async function discoverModeIndicatorCandidates(
  * Runs the full CDP preflight check for the configured IDE target.
  */
 export async function runPreflightCheck(): Promise<PreflightReport> {
-  const ide = config.bridgeIdeTarget as "cursor" | "windsurf" | "vscode";
+  const ide = config.bridgeIdeTarget;
   const cdpUrl =
     ide === "windsurf"
       ? config.windsurfRemoteDebugUrl
       : ide === "vscode"
         ? config.vscodeRemoteDebugUrl
-        : config.cursorRemoteDebugUrl;
+        : ide === "codex"
+          ? config.codexRemoteDebugUrl
+          : config.cursorRemoteDebugUrl;
   const cdp = createCdpClient();
   const selectors = getConfiguredSelectors();
   const warnings: string[] = [];

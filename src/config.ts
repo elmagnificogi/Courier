@@ -8,7 +8,7 @@ const schema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().default(""),
   TELEGRAM_ALLOWED_USER_IDS: z.string().default(""),
   BRIDGE_BACKEND_MODE: z.enum(["cdp", "api"]).default("cdp"),
-  BRIDGE_IDE_TARGET: z.enum(["cursor", "windsurf", "vscode"]).default("cursor"),
+  BRIDGE_IDE_TARGET: z.enum(["cursor", "windsurf", "vscode", "codex"]).default("cursor"),
   BRIDGE_API_AUTH_TOKEN: z.string().default(""),
   CURSOR_APP_EXE: z.string().default("Cursor"),
   CURSOR_REMOTE_DEBUG_URL: z.string().default("http://127.0.0.1:9222"),
@@ -81,6 +81,17 @@ const schema = z.object({
   WECOM_AES_KEY: z.string().default(""),
   WECOM_ALLOWED_USER_IDS: z.string().default(""),
   WECOM_API_BASE: z.string().default("https://qyapi.weixin.qq.com"),
+  WECOM_AIBOT_ENABLED: z.string().default("false"),
+  WECOM_AIBOT_BOT_ID: z.string().default(""),
+  WECOM_AIBOT_SECRET: z.string().default(""),
+  WECOM_AIBOT_WS_URL: z.string().default("wss://openws.work.weixin.qq.com"),
+  WECOM_AIBOT_ALLOWED_USER_IDS: z.string().default(""),
+  CODEX_REMOTE_DEBUG_URL: z.string().default("http://127.0.0.1:9225"),
+  CODEX_TARGET_TITLE_HINT: z.string().default("Codex"),
+  CODEX_CHAT_INPUT_SELECTOR: z.string().default('textarea, [contenteditable="true"], [role="textbox"]'),
+  CODEX_RESPONSE_SELECTOR: z.string().default('[class*="markdown"], article, [data-message-author-role="assistant"]'),
+  CODEX_ACTION_TIMEOUT_MS: z.coerce.number().default(30000),
+  CODEX_RELAY_MAX_MS: z.coerce.number().default(3600000),
   WECHAT_ENABLED: z.string().default("false"),
   WECHAT_APP_ID: z.string().default(""),
   WECHAT_APP_SECRET: z.string().default(""),
@@ -218,6 +229,22 @@ export const config = {
       .filter((v) => v.length > 0),
     apiBase: env.WECOM_API_BASE.replace(/\/$/, "")
   },
+  wecomAibot: {
+    enabled: env.WECOM_AIBOT_ENABLED.toLowerCase() === "true",
+    botId: env.WECOM_AIBOT_BOT_ID,
+    secret: env.WECOM_AIBOT_SECRET,
+    wsUrl: env.WECOM_AIBOT_WS_URL.trim() || "wss://openws.work.weixin.qq.com",
+    allowedUserIds: env.WECOM_AIBOT_ALLOWED_USER_IDS
+      .split(",")
+      .map((v) => v.trim())
+      .filter((v) => v.length > 0)
+  },
+  codexRemoteDebugUrl: env.CODEX_REMOTE_DEBUG_URL,
+  codexTargetTitleHint: env.CODEX_TARGET_TITLE_HINT,
+  codexChatInputSelector: env.CODEX_CHAT_INPUT_SELECTOR.trim() || 'textarea, [contenteditable="true"], [role="textbox"]',
+  codexResponseSelector: env.CODEX_RESPONSE_SELECTOR.trim() || '[class*="markdown"], article, [data-message-author-role="assistant"]',
+  codexActionTimeoutMs: env.CODEX_ACTION_TIMEOUT_MS,
+  codexRelayMaxMs: env.CODEX_RELAY_MAX_MS,
   wechat: {
     enabled: env.WECHAT_ENABLED.toLowerCase() === "true",
     appId: env.WECHAT_APP_ID,
@@ -249,6 +276,17 @@ export const config = {
   port: env.PORT
 };
 
+export function ideDisplayName(): string {
+  if (config.bridgeIdeTarget === "windsurf") return "Windsurf";
+  if (config.bridgeIdeTarget === "vscode") return "VS Code";
+  if (config.bridgeIdeTarget === "codex") return "Codex";
+  return "Cursor";
+}
+
+export function ideSupportsDebugMode(): boolean {
+  return config.bridgeIdeTarget === "cursor";
+}
+
 export function enabledAdapterNames(): string[] {
   const names: string[] = ["http"];
   if (config.telegramBotToken) names.push("telegram");
@@ -256,6 +294,7 @@ export function enabledAdapterNames(): string[] {
   if (config.email.enabled) names.push("email");
   if (config.feishu.enabled) names.push("feishu");
   if (config.wecom.enabled) names.push("wecom");
+  if (config.wecomAibot.enabled) names.push("wecom-aibot");
   if (config.wechat.enabled) names.push("wechat");
   if (config.qq.enabled) names.push("qq");
   return names;

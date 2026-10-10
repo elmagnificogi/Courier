@@ -6,6 +6,7 @@ import { FeishuService } from "../platform/FeishuService";
 import { WeComService } from "../platform/WeComService";
 import { WeChatService } from "../platform/WeChatService";
 import { QQService } from "../platform/QQService";
+import { WeComAibotService } from "../platform/WeComAibotService";
 import { HttpResult } from "../platform/HttpResult";
 import { parseQueryPreservingPlus } from "../platform/weixinCrypto";
 
@@ -14,6 +15,7 @@ const feishu = new FeishuService();
 const wecom = new WeComService();
 const wechat = new WeChatService();
 const qq = new QQService();
+const wecomAibot = new WeComAibotService();
 
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -55,6 +57,7 @@ function headerMap(req: IncomingMessage): Record<string, string | undefined> {
 
 export function startHealthServer(): void {
   wecom.start();
+  wecomAibot.start();
   wechat.start();
   qq.start();
 

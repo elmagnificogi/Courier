@@ -8,6 +8,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased]
 
 ### Added
+- WeCom intelligent robot over WebSocket (`wss://openws.work.weixin.qq.com`). No public callback URL. Text, voice transcript, image, file, and mixed messages are decrypted and injected into the active IDE.
+- Codex desktop as `BRIDGE_IDE_TARGET=codex`, driven through CDP on port 9225.
+- QQ file attachments (`content_type=file` and other non-image files) download and inject the same way photos already did.
 - QQ inbound photos: download `attachments.url`, inject into the Cursor composer, and relay the next text (or same-message caption) with the pending image.
 - Official WeCom (企业微信), WeChat Official Account, and QQ bot adapters for the same command surface as Telegram/Feishu (`/help`, `/mode`, `/choose`, prompt relay).
 - IM notification hub so CDP preflight alerts fan out to every enabled adapter, not only Telegram.

@@ -1,14 +1,15 @@
 import { mkdirSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
-import { extname, join } from "node:path";
+import { join } from "node:path";
 import { createPrivateKey, createPublicKey, sign, verify } from "node:crypto";
-import { config } from "../config";
+import { config, ideDisplayName } from "../config";
 import { logger } from "../logger";
 import { AgentProgressEvent } from "../types";
 import { CommandRouter } from "./CommandRouter";
 import { notificationHub } from "./NotificationHub";
 import { HttpResult } from "./HttpResult";
 import { TextSecurityGuard } from "../security/TextSecurityGuard";
+import { isQqFileAttachment, isQqImageAttachment, qqAttachmentFileName } from "./qqAttachments";
 import { ed25519PrivateKeyDer, MessageDeduper, splitMessage } from "./weixinCrypto";
 
 const QQ_STREAM_MAX_CHARS = 4000;
@@ -212,13 +213,14 @@ export class QQService {
       );
       return;
     }
-    const images = attachments.filter((item) => this.isImageAttachment(item));
-    if (images.length > 0) {
-      await this.handleIncomingImages(openId, msgId, text, images, "private");
+    const images = attachments.filter((item) => isQqImageAttachment(item));
+    const files = attachments.filter((item) => isQqFileAttachment(item));
+    if (images.length > 0 || files.length > 0) {
+      await this.handleIncomingAttachments(openId, msgId, text, images, files, "private");
       return;
     }
     if (!text) {
-      await this.sendPrivate(openId, "请发送文本命令，例如 /help。发图的话直接传图片即可。", msgId);
+      await this.sendPrivate(openId, "请发送文本命令，例如 /help。图片和文件可以直接发。", msgId);
       return;
     }
     try {
@@ -249,13 +251,14 @@ export class QQService {
     if (config.qq.allowedOpenIds.length > 0 && memberOpenId && !config.qq.allowedOpenIds.includes(memberOpenId)) {
       return;
     }
-    const images = attachments.filter((item) => this.isImageAttachment(item));
-    if (images.length > 0) {
-      await this.handleIncomingImages(groupOpenId, msgId, text, images, "group", memberOpenId);
+    const images = attachments.filter((item) => isQqImageAttachment(item));
+    const files = attachments.filter((item) => isQqFileAttachment(item));
+    if (images.length > 0 || files.length > 0) {
+      await this.handleIncomingAttachments(groupOpenId, msgId, text, images, files, "group", memberOpenId);
       return;
     }
     if (!text) {
-      await this.sendGroup(groupOpenId, "请发送文本命令，例如 /help。发图的话直接传图片即可。", msgId);
+      await this.sendGroup(groupOpenId, "请发送文本命令，例如 /help。图片和文件可以直接发。", msgId);
       return;
     }
     try {
@@ -266,11 +269,12 @@ export class QQService {
     }
   }
 
-  private async handleIncomingImages(
+  private async handleIncomingAttachments(
     targetId: string,
     msgId: string,
     text: string,
     images: QQAttachment[],
+    files: QQAttachment[],
     kind: "private" | "group",
     memberOpenId?: string
   ): Promise<void> {
@@ -279,17 +283,34 @@ export class QQService {
       kind === "private"
         ? this.sendPrivate(targetId, content, msgId)
         : this.sendGroup(targetId, content, msgId);
-    const first = images[0];
-    if (!first) {
+    const items = [
+      ...images.map((attachment) => ({ attachment, mediaKind: "photo" as const })),
+      ...files.map((attachment) => ({ attachment, mediaKind: "document" as const }))
+    ];
+    if (items.length === 0) {
       return;
     }
     try {
-      const downloaded = await this.downloadAttachment(first);
-      const prompt = text.trim();
-      if (prompt && this.isRelayText(prompt)) {
-        await send("图已收到，正在转发给 Cursor…");
+      let reply = "";
+      for (let index = 0; index < items.length; index += 1) {
+        const item = items[index];
+        if (!item) {
+          continue;
+        }
+        const downloaded = await this.downloadAttachment(item.attachment, item.mediaKind);
+        const isLast = index === items.length - 1;
+        const prompt = isLast ? text.trim() : "";
+        const attachOptions: {
+          fileName: string;
+          mimeType?: string;
+          prompt?: string;
+          onProgress?: (event: AgentProgressEvent) => Promise<void>;
+        } = { fileName: downloaded.fileName };
+        if (downloaded.mimeType) {
+          attachOptions.mimeType = downloaded.mimeType;
+        }
         const stream: C2cStreamState | null =
-          kind === "private"
+          isLast && prompt && this.isRelayText(prompt) && kind === "private"
             ? {
                 streamMsgId: null,
                 index: 0,
@@ -299,28 +320,20 @@ export class QQService {
                 failed: false
               }
             : null;
-        const attachOptions: {
-          prompt: string;
-          fileName: string;
-          mimeType?: string;
-          onProgress?: (event: AgentProgressEvent) => Promise<void>;
-        } = {
-          prompt,
-          fileName: downloaded.fileName
-        };
-        if (downloaded.mimeType) {
-          attachOptions.mimeType = downloaded.mimeType;
+        if (prompt && this.isRelayText(prompt)) {
+          attachOptions.prompt = prompt;
+          if (stream) {
+            await send(`附件已收到，正在转发给 ${ideDisplayName()}…`);
+            attachOptions.onProgress = async (event) => {
+              const snapshot = event.content?.trim();
+              if (snapshot) {
+                await this.pushC2cStream(targetId, msgId, stream, snapshot, false);
+              }
+            };
+          }
         }
-        if (stream && kind === "private") {
-          attachOptions.onProgress = async (event) => {
-            const snapshot = event.content?.trim();
-            if (snapshot) {
-              await this.pushC2cStream(targetId, msgId, stream, snapshot, false);
-            }
-          };
-        }
-        const reply = await this.router.attachPhoto(channelId, downloaded.path, attachOptions);
-        if (kind === "private" && stream) {
+        reply = await this.router.attachMedia(channelId, downloaded.path, item.mediaKind, attachOptions);
+        if (stream) {
           if (reply) {
             const closed = await this.pushC2cStream(targetId, msgId, stream, reply, true);
             if (!closed) {
@@ -330,31 +343,16 @@ export class QQService {
               }
             }
           } else if (!stream.sent) {
-            await send(reply || "图已送达，但还没有捕获到完整回复。");
+            await send(reply || "附件已送达，但还没有捕获到完整回复。");
           }
           return;
         }
-        await send(reply);
-        return;
       }
-      const queuedOptions: { fileName: string; mimeType?: string } = { fileName: downloaded.fileName };
-      if (downloaded.mimeType) {
-        queuedOptions.mimeType = downloaded.mimeType;
-      }
-      const status = await this.router.attachPhoto(channelId, downloaded.path, queuedOptions);
-      await send(status);
+      await send(reply);
     } catch (error) {
-      logger.warn({ error, targetId }, "QQ image attach failed");
-      await send("图片下载或注入失败，请再发一次，或把图存到电脑后发本地路径。");
+      logger.warn({ error, targetId }, "QQ attachment attach failed");
+      await send("图片或文件下载失败，请再发一次，或把文件存到电脑后发本地路径。");
     }
-  }
-
-  private isImageAttachment(attachment: QQAttachment): boolean {
-    const type = String(attachment.content_type ?? "").toLowerCase();
-    if (type.startsWith("image/")) {
-      return true;
-    }
-    return /\.(jpe?g|png|gif|webp|bmp|heic)$/i.test(attachment.filename ?? "");
   }
 
   private normalizeAttachmentUrl(url: string): string {
@@ -369,7 +367,8 @@ export class QQService {
   }
 
   private async downloadAttachment(
-    attachment: QQAttachment
+    attachment: QQAttachment,
+    mediaKind: "photo" | "document" = "photo"
   ): Promise<{ path: string; fileName: string; mimeType?: string }> {
     const url = this.normalizeAttachmentUrl(attachment.url ?? "");
     if (!url) {
@@ -389,9 +388,9 @@ export class QQService {
       throw new Error(`QQ attachment download failed: ${response.status}`);
     }
     const buffer = Buffer.from(await response.arrayBuffer());
-    const downloadDir = join(process.cwd(), "tmp", "qq-images");
+    const downloadDir = join(process.cwd(), "tmp", mediaKind === "document" ? "qq-files" : "qq-images");
     mkdirSync(downloadDir, { recursive: true });
-    const fileName = this.safeAttachmentFileName(attachment);
+    const fileName = qqAttachmentFileName(attachment, mediaKind);
     const filePath = join(downloadDir, `${Date.now()}-${fileName}`);
     await writeFile(filePath, buffer);
     logger.info({ filePath, bytes: buffer.length, fileName }, "QQ attachment downloaded");
@@ -400,18 +399,6 @@ export class QQService {
       downloaded.mimeType = attachment.content_type;
     }
     return downloaded;
-  }
-
-  private safeAttachmentFileName(attachment: QQAttachment): string {
-    const raw = String(attachment.filename ?? "").replace(/[\\/:*?"<>|]/g, "_").trim();
-    if (raw && extname(raw)) {
-      return raw.slice(0, 80);
-    }
-    const type = String(attachment.content_type ?? "").toLowerCase();
-    if (type.includes("png")) return "qq-image.png";
-    if (type.includes("webp")) return "qq-image.webp";
-    if (type.includes("gif")) return "qq-image.gif";
-    return "qq-image.jpg";
   }
 
   private isRelayText(text: string): boolean {
@@ -446,7 +433,7 @@ export class QQService {
     }
 
     if (kind === "private") {
-      await this.sendPrivate(targetId, "已转发给 Cursor，正在流式同步回复…", msgId);
+      await this.sendPrivate(targetId, `已转发给 ${ideDisplayName()}，正在流式同步回复…`, msgId);
       const stream: C2cStreamState = {
         streamMsgId: null,
         index: 0,
@@ -477,7 +464,7 @@ export class QQService {
       return;
     }
 
-    await send("已转发给 Cursor，正在同步完整回复…");
+    await send(`已转发给 ${ideDisplayName()}，正在同步完整回复…`);
     let lastProgress = "";
     let lastProgressAt = 0;
     const reply = await this.router.handle(channelId, text, {

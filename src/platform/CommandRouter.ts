@@ -2,7 +2,7 @@ import { BridgeService } from "../bridge/BridgeService";
 import { BridgeMode, SendPromptOptions } from "../types";
 import { ChatStateStore } from "../telegram/ChatStateStore";
 import { TextSecurityGuard } from "../security/TextSecurityGuard";
-import { config } from "../config";
+import { ideDisplayName, ideSupportsDebugMode } from "../config";
 import { buildMultiChoiceRelayPrompt, buildSingleChoiceRelayPrompt, chooseUsageText } from "./choosePrompt";
 
 interface ProgressState {
@@ -29,6 +29,15 @@ export class CommandRouter {
     filePath: string,
     options?: { prompt?: string; fileName?: string; mimeType?: string } & SendPromptOptions
   ): Promise<string> {
+    return await this.attachMedia(channelId, filePath, "photo", options);
+  }
+
+  async attachMedia(
+    channelId: string,
+    filePath: string,
+    kind: "photo" | "document",
+    options?: { prompt?: string; fileName?: string; mimeType?: string } & SendPromptOptions
+  ): Promise<string> {
     const prompt = String(options?.prompt ?? "").trim();
     const injectOptions: { autoSubmit: false; fileName?: string; mimeType?: string } = { autoSubmit: false };
     if (options?.fileName) {
@@ -37,20 +46,26 @@ export class CommandRouter {
     if (options?.mimeType) {
       injectOptions.mimeType = options.mimeType;
     }
-    const status = await this.bridge.injectPhoto(filePath, injectOptions);
-    if (/failed|无法注入/i.test(status)) {
+    const status =
+      kind === "photo"
+        ? await this.bridge.injectPhoto(filePath, injectOptions)
+        : await this.bridge.injectDocument(filePath, injectOptions);
+    if (/failed|无法注入|失败/i.test(status)) {
       return status;
     }
     const pending: { kind: "photo" | "document"; createdAt: number; fileName?: string } = {
-      kind: "photo",
+      kind,
       createdAt: Date.now()
     };
     if (options?.fileName) {
       pending.fileName = options.fileName;
     }
     this.pendingAttachmentByChannel.set(channelId, pending);
+    const ide = ideDisplayName();
     if (!prompt) {
-      return "图已放进 Cursor 输入框。下一条文字会连这张图一起发出去。";
+      return kind === "photo"
+        ? `图已放进 ${ide} 输入框。下一条文字会连这张图一起发出去。`
+        : `文件已放进 ${ide} 输入框。下一条文字会连这个文件一起发出去。`;
     }
     return await this.relayPrompt(channelId, prompt, options);
   }
@@ -76,7 +91,7 @@ export class CommandRouter {
     }
     if (value.startsWith("/mode")) {
       const mode = value.replace("/mode", "").trim().toLowerCase() as BridgeMode;
-      const validModes = config.bridgeIdeTarget === "windsurf" ? ["ask", "code", "plan"] : ["ask", "code", "plan", "debug"];
+      const validModes = ideSupportsDebugMode() ? ["ask", "code", "plan", "debug"] : ["ask", "code", "plan"];
       if (!validModes.includes(mode)) {
         return `模式无效。请使用：/mode ${validModes.join("|")}`;
       }
@@ -296,7 +311,7 @@ export class CommandRouter {
   private helpText(): string {
     return [
       "Courier 命令：",
-      config.bridgeIdeTarget === "windsurf" ? "/mode ask|code|plan" : "/mode ask|code|plan|debug  切换模式",
+      ideSupportsDebugMode() ? "/mode ask|code|plan|debug  切换模式" : "/mode ask|code|plan  切换模式",
       "/model [模型名]  查看或切换模型",
       "/newchat  新开 IDE 对话",
       "/context  Context 用量",
@@ -311,10 +326,10 @@ export class CommandRouter {
       "/targets  同 /chats",
       "/target <序号>|auto  选择目标",
       "/diag  诊断",
-      "/whoami  查看你的 QQ openid",
-      "/queue  查看待发送的图",
-      "/clearqueue  清掉待发送的图",
-      "QQ 发图后，再发文字，会连图一起进 Cursor"
+      "/whoami  查看 QQ openid，或企业微信智能机器人 userid",
+      "/queue  查看待发送的图片或文件",
+      "/clearqueue  清掉待发送的附件",
+      "企业微信智能机器人、QQ 可以直接发图片或文件，下一条文字会一起进入当前 IDE"
     ].join("\n");
   }
 

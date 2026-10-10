@@ -5,18 +5,21 @@ import { BaseCdpClient, ClientDomains } from "../cdp/BaseCdpClient";
 import { CursorCdpClient } from "./CursorCdpClient";
 import { WindsurfCdpClient } from "../windsurf/WindsurfCdpClient";
 import { VscodeCdpClient } from "../vscode/VscodeCdpClient";
+import { CodexCdpClient } from "../codex/CodexCdpClient";
 import sharp from "sharp";
 import { recognize } from "tesseract.js";
 
 function createCdpClientForContext(): BaseCdpClient {
   if (config.bridgeIdeTarget === "windsurf") return new WindsurfCdpClient();
   if (config.bridgeIdeTarget === "vscode") return new VscodeCdpClient();
+  if (config.bridgeIdeTarget === "codex") return new CodexCdpClient();
   return new CursorCdpClient();
 }
 
 function contextSelectorForIde(): string {
   if (config.bridgeIdeTarget === "windsurf") return config.windsurfContextSelector;
   if (config.bridgeIdeTarget === "vscode") return config.vscodeContextSelector;
+  if (config.bridgeIdeTarget === "codex") return "";
   return config.cursorContextSelector;
 }
 

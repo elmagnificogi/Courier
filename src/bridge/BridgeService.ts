@@ -6,12 +6,13 @@ import path from "path";
 import { WindsurfAutomationClient } from "../windsurf/WindsurfAutomationClient";
 import { ImageInjectionService } from "../media/ImageInjectionService";
 import { BridgeMode, SendPromptOptions } from "../types";
-import { config } from "../config";
+import { config, ideDisplayName } from "../config";
+import { CodexAutomationClient } from "../codex/CodexAutomationClient";
 import { CursorApiBackend } from "../backends/CursorApiBackend";
 import { logger } from "../logger";
 import { VscodeAutomationClient } from "../vscode/VscodeAutomationClient";
 
-type IdeClient = CursorAutomationClient | WindsurfAutomationClient | VscodeAutomationClient;
+type IdeClient = CursorAutomationClient | WindsurfAutomationClient | VscodeAutomationClient | CodexAutomationClient;
 
 export class BridgeService {
   private readonly apiBackend = new CursorApiBackend();
@@ -28,6 +29,8 @@ export class BridgeService {
       this.ideClient = new WindsurfAutomationClient();
     } else if (config.bridgeIdeTarget === "vscode") {
       this.ideClient = this.vscodeClient;
+    } else if (config.bridgeIdeTarget === "codex") {
+      this.ideClient = new CodexAutomationClient();
     } else {
       this.ideClient = this.cursorClient;
     }
@@ -44,7 +47,9 @@ export class BridgeService {
         ? "run-windsurf.bat"
         : config.bridgeIdeTarget === "vscode"
           ? "run-vscode.bat"
-          : "run-cursor.bat";
+          : config.bridgeIdeTarget === "codex"
+            ? "run-codex.bat"
+            : "run-cursor.bat";
     const scriptPath = path.resolve(cwd, script);
 
     try {
@@ -145,7 +150,11 @@ export class BridgeService {
       const result = await this.ideClient.listModels();
       return result.text;
     }
-    return "目前只有 Windsurf 和 VS Code 支持列出模型。";
+    if (config.bridgeIdeTarget === "codex" && this.ideClient instanceof CodexAutomationClient) {
+      const result = await this.ideClient.listModels();
+      return result.text;
+    }
+    return "目前只有 Windsurf、VS Code 和 Codex 支持列出模型。";
   }
 
   async contextStatus(): Promise<string> {
@@ -173,7 +182,7 @@ export class BridgeService {
     if (config.bridgeBackendMode === "api") {
       return "API 后端模式下无法列出目标。";
     }
-    const ideName = config.bridgeIdeTarget === "windsurf" ? "Windsurf" : config.bridgeIdeTarget === "vscode" ? "VS Code" : "Cursor";
+    const ideName = ideDisplayName();
     const targets = await this.ideClient.listChatTargets();
     const selection = await this.ideClient.targetSelectionStatus();
     if (targets.length === 0) {
@@ -219,7 +228,7 @@ export class BridgeService {
       return await this.apiBackend.diagnostics();
     }
 
-    const ideName = config.bridgeIdeTarget === "windsurf" ? "Windsurf" : config.bridgeIdeTarget === "vscode" ? "VS Code" : "Cursor";
+    const ideName = ideDisplayName();
     const diag = await this.ideClient.diagnostics();
 
     const sel: {

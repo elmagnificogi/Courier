@@ -5,6 +5,7 @@ dist/
 !.env.cursor.example
 !.env.windsurf.example
 !.env.vscode.example
+!.env.codex.example
 tmp/
 temp/
 *.tmp

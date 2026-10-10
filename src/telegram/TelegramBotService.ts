@@ -3,7 +3,7 @@ import type { Message, CallbackQuery, InlineKeyboardMarkup } from "grammy/types"
 import { mkdirSync, writeFileSync } from "node:fs";
 import { access } from "node:fs/promises";
 import { basename, join } from "node:path";
-import { config } from "../config";
+import { config, ideDisplayName, ideSupportsDebugMode } from "../config";
 import { logger } from "../logger";
 import { BridgeService } from "../bridge/BridgeService";
 import { BridgeMode } from "../types";
@@ -377,8 +377,8 @@ export class TelegramBotService {
   }
 
   private helpTextCompact(): string {
-    const ide = config.bridgeIdeTarget === "windsurf" ? "Windsurf" : config.bridgeIdeTarget === "vscode" ? "VS Code" : "Cursor";
-    const modeHelp = config.bridgeIdeTarget === "windsurf" || config.bridgeIdeTarget === "vscode" ? "ask|code|plan" : "ask|code|plan|debug";
+    const ide = ideDisplayName();
+    const modeHelp = ideSupportsDebugMode() ? "ask|code|plan|debug" : "ask|code|plan";
     const vscodeNote =
       config.bridgeIdeTarget === "vscode"
         ? "- VS Code mode/new-chat only report success when confirmed; otherwise they return explicit unverified/failed status."
@@ -409,8 +409,8 @@ export class TelegramBotService {
   }
 
   private helpTextAll(): string {
-    const ide = config.bridgeIdeTarget === "windsurf" ? "Windsurf" : config.bridgeIdeTarget === "vscode" ? "VS Code" : "Cursor";
-    const modeHelp = config.bridgeIdeTarget === "windsurf" || config.bridgeIdeTarget === "vscode" ? "ask|code|plan" : "ask|code|plan|debug";
+    const ide = ideDisplayName();
+    const modeHelp = ideSupportsDebugMode() ? "ask|code|plan|debug" : "ask|code|plan";
     const vscodeBoundaryNote =
       config.bridgeIdeTarget === "vscode"
         ? "- VS Code mode/new-chat use strict confirmation semantics: switched only on exact Ask/Agent/Plan or new-chat signal; otherwise explicit unverified/failed."
@@ -706,10 +706,7 @@ export class TelegramBotService {
 
   private async handleModeCommand(chatId: number, text: string): Promise<void> {
     const mode = text.replace("/mode", "").trim().toLowerCase() as BridgeMode;
-    const validModes =
-      config.bridgeIdeTarget === "windsurf" || config.bridgeIdeTarget === "vscode"
-        ? ["ask", "code", "plan"]
-        : ["ask", "code", "plan", "debug"];
+    const validModes = ideSupportsDebugMode() ? ["ask", "code", "plan", "debug"] : ["ask", "code", "plan"];
     if (!validModes.includes(mode)) {
       await this.sendText(chatId, `Invalid mode. Use: /mode ${validModes.join("|")}`);
       return;
