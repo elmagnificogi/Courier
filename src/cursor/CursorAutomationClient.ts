@@ -1309,10 +1309,20 @@ export class CursorAutomationClient {
           if (stableAt === 0) {
             stableAt = Date.now();
           }
-          if (!snapshot.generating && Date.now() - stableAt >= 2000) {
+          const stableMs = Date.now() - stableAt;
+          if (!snapshot.generating && stableMs >= 2000) {
             logger.info(
               { chars: markdown.length, bubbles: bubbleOrder.length },
               "Cursor turn captured after generation settled"
+            );
+            return markdown;
+          }
+          // Only force-capture while generating if the answer has been stable for a long
+          // time AND is already substantial — the previous 8s cutoff truncated short turns.
+          if (snapshot.generating && stableMs >= 45_000 && markdown.length >= 120) {
+            logger.info(
+              { chars: markdown.length, bubbles: bubbleOrder.length, stableMs },
+              "Cursor turn captured after long stable generation"
             );
             return markdown;
           }

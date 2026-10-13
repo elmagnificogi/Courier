@@ -12,15 +12,28 @@ import { TextSecurityGuard } from "../security/TextSecurityGuard";
 import { isQqFileAttachment, isQqImageAttachment, qqAttachmentFileName } from "./qqAttachments";
 import { ed25519PrivateKeyDer, MessageDeduper, splitMessage } from "./weixinCrypto";
 
+/** QQ C2C stream_messages hard limit for a single content_raw. */
 const QQ_STREAM_MAX_CHARS = 4000;
+/** Match AstrBot: throttle mid-stream replace updates (~1s). */
+const QQ_STREAM_THROTTLE_MS = 1000;
+/**
+ * If Cursor pauses mid-turn (tools / thinking), seal the open stream segment so PC QQ
+ * does not keep an input_state=1 bubble that shows as 「不支持的消息类型」.
+ */
+const QQ_STREAM_IDLE_SEAL_MS = 12_000;
 
 interface C2cStreamState {
   streamMsgId: string | null;
   index: number;
+  /** Exact content_raw last accepted by QQ (immutable prefix for replace mode). */
   sent: string;
   msgSeq: number | null;
-  contentType: "markdown" | "text";
   failed: boolean;
+  /** True after input_state=10 was accepted (or stream never started). */
+  finished: boolean;
+  lastPushAt: number;
+  /** Passive-reply msg_id / event_id anchor from the inbound user message. */
+  replyMsgId: string;
 }
 
 interface TokenCache {
@@ -325,8 +338,10 @@ export class QQService {
                 index: 0,
                 sent: "",
                 msgSeq: null,
-                contentType: "text",
-                failed: false
+                failed: false,
+                finished: false,
+                lastPushAt: 0,
+                replyMsgId: msgId
               }
             : null;
         if (prompt && this.isRelayText(prompt)) {
@@ -341,22 +356,26 @@ export class QQService {
             };
           }
         }
-        reply = await this.router.attachMedia(channelId, downloaded.path, item.mediaKind, attachOptions);
-        if (stream) {
-          const finalText = (reply || stream.sent || "").trim();
-          if (!finalText) {
-            await send("附件已送达，但还没有捕获到完整回复。");
+        try {
+          reply = await this.router.attachMedia(channelId, downloaded.path, item.mediaKind, attachOptions);
+          if (stream) {
+            const finalText = (reply || stream.sent || "").trim();
+            if (!finalText) {
+              await this.finishC2cStream(targetId, msgId, stream);
+              await send("附件已送达，但还没有捕获到完整回复。");
+              return;
+            }
+            const closed = await this.pushC2cStream(targetId, msgId, stream, finalText, true);
+            if (!closed) {
+              await this.finishC2cStream(targetId, msgId, stream);
+              await this.sendPrivate(targetId, finalText, msgId, false);
+            }
             return;
           }
-          const closed = await this.pushC2cStream(targetId, msgId, stream, finalText, true);
-          if (!closed) {
-            const leftover =
-              stream.sent && finalText.startsWith(stream.sent) ? finalText.slice(stream.sent.length).trim() : finalText;
-            if (leftover && leftover !== stream.sent.trim()) {
-              await this.sendPrivate(targetId, leftover, msgId, false);
-            }
+        } finally {
+          if (stream && stream.streamMsgId && !stream.finished) {
+            await this.finishC2cStream(targetId, msgId, stream);
           }
-          return;
         }
       }
       await send(reply);
@@ -470,31 +489,98 @@ export class QQService {
       index: 0,
       sent: "",
       msgSeq: null,
-      contentType: "text",
-      failed: false
+      failed: false,
+      finished: false,
+      lastPushAt: 0,
+      replyMsgId: msgId
     };
-    const reply = await this.router.handle(channelId, text, {
-      onProgress: async (event) => {
-        const snapshot = event.content?.trim();
-        if (snapshot) {
+    let sealedText = "";
+    let finalText = "";
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearIdle = () => {
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+        idleTimer = null;
+      }
+    };
+    const armIdleSeal = () => {
+      clearIdle();
+      idleTimer = setTimeout(() => {
+        void (async () => {
+          if (!stream.streamMsgId || stream.finished) {
+            return;
+          }
+          logger.info(
+            { streamed: stream.sent.length },
+            "QQ stream idle mid-turn, sealing segment with input_state=10 for desktop clients"
+          );
+          await this.finishC2cStream(targetId, msgId, stream);
+          sealedText = stream.sent.replace(/\n$/, "").trim() || sealedText;
+          this.resetC2cStreamSegment(stream);
+        })();
+      }, QQ_STREAM_IDLE_SEAL_MS);
+    };
+    try {
+      const reply = await this.router.handle(channelId, text, {
+        onProgress: async (event) => {
+          const snapshot = event.content?.trim();
+          if (!snapshot) {
+            return;
+          }
           await this.pushC2cStream(targetId, msgId, stream, snapshot, false);
+          if (stream.streamMsgId && !stream.finished) {
+            armIdleSeal();
+          }
         }
+      });
+      clearIdle();
+      finalText = (reply || stream.sent || sealedText || "").trim();
+      if (!finalText) {
+        await this.finishC2cStream(targetId, msgId, stream);
+        await this.sendPrivate(targetId, "提示词已送达，但还没有捕获到完整回复。", msgId);
+        return;
       }
-    });
-    const finalText = (reply || stream.sent || "").trim();
-    if (!finalText) {
-      await this.sendPrivate(targetId, "提示词已送达，但还没有捕获到完整回复。", msgId);
-      return;
-    }
-    const closed = await this.pushC2cStream(targetId, msgId, stream, finalText, true);
-    if (!closed) {
-      const leftover =
-        stream.sent && finalText.startsWith(stream.sent) ? finalText.slice(stream.sent.length).trim() : finalText;
-      if (leftover && leftover !== stream.sent.trim()) {
-        logger.warn({ chars: leftover.length, streamed: stream.sent.length }, "QQ stream incomplete, sending remainder as normal messages");
-        await this.sendPrivate(targetId, leftover, msgId, false);
+      // Already sealed an identical segment during idle — nothing more to stream.
+      if (!stream.streamMsgId && sealedText && finalText === sealedText) {
+        return;
+      }
+      const closed = await this.pushC2cStream(targetId, msgId, stream, finalText, true);
+      if (!closed) {
+        await this.finishC2cStream(targetId, msgId, stream);
+        logger.warn(
+          { chars: finalText.length, streamed: stream.sent.length },
+          "QQ stream incomplete after finalize attempt, sending full reply as normal text"
+        );
+        await this.sendPrivate(targetId, finalText, msgId, false);
+      }
+    } catch (error) {
+      clearIdle();
+      logger.warn({ error, targetId }, "QQ private stream relay failed");
+      await this.finishC2cStream(targetId, msgId, stream);
+      const fallback = (finalText || stream.sent || sealedText || "").trim();
+      if (fallback) {
+        await this.sendPrivate(targetId, fallback, msgId, false);
+      } else {
+        await this.sendPrivate(targetId, "请求失败，请查看 Courier 日志。", msgId);
+      }
+    } finally {
+      clearIdle();
+      // AstrBot #10066/#10069: missing input_state=10 → PC 「无法查看」/回滚.
+      if (stream.streamMsgId && !stream.finished) {
+        await this.finishC2cStream(targetId, msgId, stream);
       }
     }
+  }
+
+  /** After sealing a segment, allow the next progress snapshot to open a new stream. */
+  private resetC2cStreamSegment(state: C2cStreamState): void {
+    state.streamMsgId = null;
+    state.index = 0;
+    state.sent = "";
+    state.msgSeq = null;
+    state.failed = false;
+    state.finished = false;
+    state.lastPushAt = 0;
   }
 
   private async relayAndReply(
@@ -825,7 +911,7 @@ export class QQService {
 
   private async sendChunks(path: string, text: string, msgId?: string, markdown = false): Promise<void> {
     const token = await this.getAccessToken();
-    const chunks = splitMessage(text, markdown ? 4000 : 1800);
+    const chunks = splitMessage(TextSecurityGuard.sanitizeOutbound(text), markdown ? 4000 : 1800);
     for (const content of chunks) {
       if (!content.trim()) {
         continue;
@@ -851,6 +937,117 @@ export class QQService {
     }
   }
 
+  /**
+   * Always seal with input_state=10 once a stream_msg_id exists.
+   * Empty tail uses "\n" (AstrBot #10069). Final frame must end with "\n".
+   */
+  private async finishC2cStream(openId: string, msgId: string, state: C2cStreamState): Promise<void> {
+    if (state.finished || !state.streamMsgId) {
+      state.finished = true;
+      return;
+    }
+    let closeContent = state.sent || "\n";
+    if (!closeContent.endsWith("\n")) {
+      closeContent = `${closeContent}\n`;
+    }
+    const previousFailed = state.failed;
+    state.failed = false;
+    const ok = await this.sendC2cStreamChunk(openId, msgId, state, closeContent, true);
+    if (!ok) {
+      state.failed = true;
+      logger.warn(
+        { streamedChars: state.sent.length, index: state.index },
+        "QQ stream force-finish (input_state=10) failed"
+      );
+    }
+    if (previousFailed) {
+      state.failed = true;
+    }
+  }
+
+  private async sendC2cStreamChunk(
+    openId: string,
+    msgId: string,
+    state: C2cStreamState,
+    contentRaw: string,
+    done: boolean
+  ): Promise<boolean> {
+    // Official @tencent-connect/qqbot-nodejs and openclaw-qqbot only use markdown for
+    // stream_messages. content_type=text is accepted by the API but PC QQ often shows
+    // it as 「不支持的消息类型」/「必须要用手机客户端才能看」.
+    const token = await this.getAccessToken();
+    const anchor = state.replyMsgId || msgId;
+    if (state.msgSeq === null) {
+      const nextSeq = (this.seqByMsgId.get(anchor) ?? 0) + 1;
+      this.seqByMsgId.set(anchor, nextSeq);
+      state.msgSeq = nextSeq;
+    }
+    const body: Record<string, unknown> = {
+      input_mode: "replace",
+      input_state: done ? 10 : 1,
+      index: state.index,
+      content_type: "markdown",
+      content_raw: contentRaw,
+      msg_seq: state.msgSeq,
+      msg_id: anchor,
+      // Match qqbot-nodejs StreamSession: event_id defaults to the inbound msg id.
+      event_id: anchor
+    };
+    if (state.streamMsgId) {
+      body.stream_msg_id = state.streamMsgId;
+    }
+    const path = `/v2/users/${encodeURIComponent(openId)}/stream_messages`;
+    const response = await fetch(`${config.qq.apiBase}${path}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        authorization: `QQBot ${token}`,
+        "x-union-appid": config.qq.appId
+      },
+      body: JSON.stringify(body)
+    });
+    const raw = await response.text().catch(() => "");
+    if (!response.ok) {
+      // AstrBot: stream markdown frames must end with "\n".
+      if (done && contentRaw && !contentRaw.endsWith("\n") && /\\n|换行|newline|40034021/i.test(raw)) {
+        return await this.sendC2cStreamChunk(openId, msgId, state, `${contentRaw}\n`, true);
+      }
+      logger.warn(
+        { status: response.status, errBody: raw, path, index: state.index, done },
+        "QQ stream send failed"
+      );
+      return false;
+    }
+    let parsed: { id?: string; remain_msg_len?: number } = {};
+    try {
+      parsed = raw ? (JSON.parse(raw) as { id?: string; remain_msg_len?: number }) : {};
+    } catch {
+      parsed = {};
+    }
+    if (!state.streamMsgId && parsed.id) {
+      state.streamMsgId = parsed.id;
+    }
+    // Store exact accepted content_raw — replace mode forbids changing this prefix.
+    state.sent = contentRaw;
+    state.index += 1;
+    state.lastPushAt = Date.now();
+    if (done) {
+      state.finished = true;
+    }
+    logger.info(
+      {
+        path,
+        chars: contentRaw.length,
+        index: state.index,
+        done,
+        contentType: "markdown",
+        remain: parsed.remain_msg_len ?? null
+      },
+      "QQ stream chunk sent"
+    );
+    return true;
+  }
+
   private async pushC2cStream(
     openId: string,
     msgId: string,
@@ -858,26 +1055,49 @@ export class QQService {
     full: string,
     done: boolean
   ): Promise<boolean> {
-    if (state.failed) {
+    // A sealed idle segment sets finished=true; reopen for the next snapshot / final.
+    if (state.finished && state.streamMsgId) {
+      return true;
+    }
+    if (state.finished && !state.streamMsgId) {
+      state.finished = false;
+    }
+    if (state.failed && !done) {
       return false;
     }
     const sanitized = TextSecurityGuard.sanitizeOutbound(full).trim();
     if (!sanitized && !done) {
       return true;
     }
-    if (state.sent && sanitized && sanitized.length < state.sent.length && state.sent.startsWith(sanitized)) {
+    // Skip tiny first crumbs; avoid opening a stream on a 1-char flicker.
+    if (!done && !state.streamMsgId && sanitized.length < 8) {
+      return true;
+    }
+    // Throttle mid-stream updates (AstrBot uses ~1s).
+    if (!done && state.streamMsgId && Date.now() - state.lastPushAt < QQ_STREAM_THROTTLE_MS) {
+      return true;
+    }
+    const sentLogical = state.sent.replace(/\n$/, "");
+    if (sentLogical && sanitized && sanitized.length < sentLogical.length && sentLogical.startsWith(sanitized)) {
       if (!done) {
         return true;
       }
     }
-    const diverged = Boolean(state.sent && sanitized && !sanitized.startsWith(state.sent));
-    if (diverged && !done) {
-      return true;
+    // replace: content_raw must keep SentContent as prefix. Cursor DOM rewrites break that —
+    // seal the old segment (AstrBot tool-break pattern) and start a fresh stream.
+    const diverged = Boolean(sentLogical && sanitized && !sanitized.startsWith(sentLogical));
+    if (diverged && state.streamMsgId) {
+      logger.info(
+        { prev: sentLogical.length, next: sanitized.length },
+        "QQ stream prefix diverged, sealing segment and starting a new one"
+      );
+      await this.finishC2cStream(openId, msgId, state);
+      this.resetC2cStreamSegment(state);
     }
-    let next = diverged ? state.sent : sanitized || state.sent;
+    let next = sanitized || state.sent;
     if (next.length > QQ_STREAM_MAX_CHARS) {
       next = next.slice(0, QQ_STREAM_MAX_CHARS);
-      if (state.sent && !next.startsWith(state.sent)) {
+      if (state.sent && !next.startsWith(state.sent.replace(/\n$/, ""))) {
         next = state.sent;
       }
     }
@@ -885,95 +1105,33 @@ export class QQService {
       if (!done) {
         return true;
       }
-      if (!state.streamMsgId) {
+      // Empty finalize placeholder — required once stream_msg_id exists.
+      next = state.streamMsgId ? "\n" : "";
+      if (!next) {
         return false;
       }
+    }
+    // Mid-stream: never append "\n" (poisons SentContent → 40007 on next replace).
+    // Final: must end with "\n" (QQ API / AstrBot STREAM_MARKDOWN_NEWLINE_ERROR).
+    if (done && !next.endsWith("\n")) {
+      next = `${next}\n`;
     }
     if (!done && next === state.sent) {
       return true;
     }
 
-    const sendOnce = async (contentType: "markdown" | "text"): Promise<boolean> => {
-      const token = await this.getAccessToken();
-      if (state.msgSeq === null) {
-        const nextSeq = (this.seqByMsgId.get(msgId) ?? 0) + 1;
-        this.seqByMsgId.set(msgId, nextSeq);
-        state.msgSeq = nextSeq;
-      }
-      // QQ stream API requires a trailing newline, especially on the final chunk.
-      let contentRaw = next || " ";
-      if (!contentRaw.endsWith("\n")) {
-        contentRaw = `${contentRaw}\n`;
-      }
-      const body: Record<string, unknown> = {
-        input_mode: "replace",
-        input_state: done ? 10 : 1,
-        index: state.index,
-        content_type: contentType,
-        content_raw: contentRaw,
-        msg_seq: state.msgSeq
-      };
-      if (msgId) {
-        body.msg_id = msgId;
-      }
-      if (state.streamMsgId) {
-        body.stream_msg_id = state.streamMsgId;
-        body.is_wakeup = true;
-      }
-      const path = `/v2/users/${encodeURIComponent(openId)}/stream_messages`;
-      const response = await fetch(`${config.qq.apiBase}${path}`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json; charset=utf-8",
-          authorization: `QQBot ${token}`,
-          "x-union-appid": config.qq.appId
-        },
-        body: JSON.stringify(body)
-      });
-      const raw = await response.text().catch(() => "");
-      if (!response.ok) {
-        logger.warn(
-          { status: response.status, errBody: raw, path, index: state.index, contentType, done },
-          "QQ stream send failed"
-        );
-        return false;
-      }
-      let parsed: { id?: string; remain_msg_len?: number } = {};
-      try {
-        parsed = raw ? (JSON.parse(raw) as { id?: string; remain_msg_len?: number }) : {};
-      } catch {
-        parsed = {};
-      }
-      if (!state.streamMsgId && parsed.id) {
-        state.streamMsgId = parsed.id;
-      }
-      state.sent = next;
-      state.index += 1;
-      state.contentType = contentType;
-      logger.info(
-        { path, chars: next.length, index: state.index, done, remain: parsed.remain_msg_len ?? null },
-        "QQ stream chunk sent"
-      );
-      return true;
-    };
-
-    let ok = await sendOnce(state.contentType);
-    if (!ok && state.contentType === "markdown") {
-      state.contentType = "text";
-      ok = await sendOnce("text");
-    }
+    const ok = await this.sendC2cStreamChunk(openId, msgId, state, next, done);
     if (!ok) {
       logger.warn(
         { streamedChars: state.sent.length, index: state.index, done },
-        "QQ stream unavailable, falling back to normal messages"
+        "QQ stream unavailable, will finalize and fall back to normal messages"
       );
       state.failed = true;
       return false;
     }
-    if (diverged) {
-      return false;
-    }
-    if (done && sanitized.length > state.sent.length && sanitized.startsWith(state.sent)) {
+    // Truncated to max chars — caller should plain-text the remainder.
+    const acceptedLogical = state.sent.replace(/\n$/, "");
+    if (done && sanitized.length > acceptedLogical.length && sanitized.startsWith(acceptedLogical)) {
       return false;
     }
     return true;
