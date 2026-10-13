@@ -49,6 +49,9 @@ export class WeComAibotService {
   private replyChain: Promise<void> = Promise.resolve();
   private pendingAck: PendingAck | null = null;
   private readonly lastStreamAt = new Map<string, number>();
+  /** Serialize Cursor jobs per userid so overlapping WeCom prompts do not race one Composer. */
+  private readonly userQueue = new Map<string, Promise<void>>();
+  private readonly userQueueDepth = new Map<string, number>();
 
   enabled(): boolean {
     return config.wecomAibot.enabled && this.hasRequiredConfig();
@@ -229,14 +232,58 @@ export class WeComAibotService {
       return;
     }
     if (inbound.media.length > 0) {
-      await this.handleMedia(channelId, reqId, text, inbound.media);
+      await this.enqueueUserJob(
+        userId,
+        reqId,
+        () => this.handleMedia(channelId, reqId, text, inbound.media)
+      );
       return;
     }
     if (!text) {
       await this.replyText(reqId, "暂不支持这种消息。请发送文字、图片或文件。");
       return;
     }
-    await this.relayText(channelId, reqId, text);
+    if (!this.isRelayText(text)) {
+      await this.relayText(channelId, reqId, text);
+      return;
+    }
+    await this.enqueueUserJob(userId, reqId, () => this.relayText(channelId, reqId, text));
+  }
+
+  private async enqueueUserJob(userId: string, reqId: string, job: () => Promise<void>): Promise<void> {
+    const depth = (this.userQueueDepth.get(userId) ?? 0) + 1;
+    this.userQueueDepth.set(userId, depth);
+    const streamId = `stream-${reqId}`;
+    if (depth > 1) {
+      await this.pushStream(
+        reqId,
+        streamId,
+        `已收到，前面还有 ${depth - 1} 个任务在跑，会按顺序单独回复，不会混在一起。`,
+        false
+      );
+    }
+    const previous = this.userQueue.get(userId) ?? Promise.resolve();
+    const run = previous.catch(() => undefined).then(async () => {
+      try {
+        await job();
+      } finally {
+        const left = Math.max(0, (this.userQueueDepth.get(userId) ?? 1) - 1);
+        if (left === 0) {
+          this.userQueueDepth.delete(userId);
+        } else {
+          this.userQueueDepth.set(userId, left);
+        }
+      }
+    });
+    this.userQueue.set(
+      userId,
+      run.finally(() => {
+        if (this.userQueue.get(userId) === run) {
+          this.userQueue.delete(userId);
+        }
+      })
+    );
+    await run;
   }
 
   private async handleMedia(

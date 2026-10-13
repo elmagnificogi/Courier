@@ -65,6 +65,9 @@ export class QQService {
   private readonly router = new CommandRouter();
   private readonly deduper = new MessageDeduper();
   private readonly seqByMsgId = new Map<string, number>();
+  /** Serialize private Cursor jobs so overlapping QQ prompts do not race one Composer/stream. */
+  private readonly privateRelayQueue = new Map<string, Promise<void>>();
+  private readonly privateQueueDepth = new Map<string, number>();
   private token: TokenCache | null = null;
   private registered = false;
   private ws: WebSocket | null = null;
@@ -216,7 +219,9 @@ export class QQService {
     const images = attachments.filter((item) => isQqImageAttachment(item));
     const files = attachments.filter((item) => isQqFileAttachment(item));
     if (images.length > 0 || files.length > 0) {
-      await this.handleIncomingAttachments(openId, msgId, text, images, files, "private");
+      await this.enqueuePrivateJob(openId, msgId, () =>
+        this.handleIncomingAttachments(openId, msgId, text, images, files, "private")
+      );
       return;
     }
     if (!text) {
@@ -224,7 +229,11 @@ export class QQService {
       return;
     }
     try {
-      await this.relayAndReply(openId, msgId, text, "private");
+      if (this.isRelayText(text)) {
+        await this.enqueuePrivateJob(openId, msgId, () => this.relayPrivateStream(openId, msgId, text, `qq:${openId}`));
+      } else {
+        await this.relayAndReply(openId, msgId, text, "private");
+      }
     } catch (error) {
       logger.warn({ error, openId }, "QQ command failed");
       await this.sendPrivate(openId, "请求失败，请查看 Courier 日志。", msgId);
@@ -316,7 +325,7 @@ export class QQService {
                 index: 0,
                 sent: "",
                 msgSeq: null,
-                contentType: "markdown",
+                contentType: "text",
                 failed: false
               }
             : null;
@@ -334,16 +343,18 @@ export class QQService {
         }
         reply = await this.router.attachMedia(channelId, downloaded.path, item.mediaKind, attachOptions);
         if (stream) {
-          if (reply) {
-            const closed = await this.pushC2cStream(targetId, msgId, stream, reply, true);
-            if (!closed) {
-              const leftover = stream.sent && reply.startsWith(stream.sent) ? reply.slice(stream.sent.length) : reply;
-              if (leftover.trim() && leftover.trim() !== stream.sent.trim()) {
-                await this.sendPrivate(targetId, leftover, msgId, true);
-              }
+          const finalText = (reply || stream.sent || "").trim();
+          if (!finalText) {
+            await send("附件已送达，但还没有捕获到完整回复。");
+            return;
+          }
+          const closed = await this.pushC2cStream(targetId, msgId, stream, finalText, true);
+          if (!closed) {
+            const leftover =
+              stream.sent && finalText.startsWith(stream.sent) ? finalText.slice(stream.sent.length).trim() : finalText;
+            if (leftover && leftover !== stream.sent.trim()) {
+              await this.sendPrivate(targetId, leftover, msgId, false);
             }
-          } else if (!stream.sent) {
-            await send(reply || "附件已送达，但还没有捕获到完整回复。");
           }
           return;
         }
@@ -413,6 +424,79 @@ export class QQService {
     return event.text;
   }
 
+  private async enqueuePrivateJob(openId: string, msgId: string, job: () => Promise<void>): Promise<void> {
+    const depth = (this.privateQueueDepth.get(openId) ?? 0) + 1;
+    this.privateQueueDepth.set(openId, depth);
+    if (depth > 1) {
+      await this.sendPrivate(
+        openId,
+        `已收到，前面还有 ${depth - 1} 个任务在跑，会按顺序单独回复，不会混在一起。`,
+        msgId
+      );
+    }
+    const previous = this.privateRelayQueue.get(openId) ?? Promise.resolve();
+    const run = previous.catch(() => undefined).then(async () => {
+      try {
+        await job();
+      } finally {
+        const left = Math.max(0, (this.privateQueueDepth.get(openId) ?? 1) - 1);
+        if (left === 0) {
+          this.privateQueueDepth.delete(openId);
+        } else {
+          this.privateQueueDepth.set(openId, left);
+        }
+      }
+    });
+    this.privateRelayQueue.set(
+      openId,
+      run.finally(() => {
+        if (this.privateRelayQueue.get(openId) === run) {
+          this.privateRelayQueue.delete(openId);
+        }
+      })
+    );
+    await run;
+  }
+
+  private async relayPrivateStream(
+    targetId: string,
+    msgId: string,
+    text: string,
+    channelId: string
+  ): Promise<void> {
+    await this.sendPrivate(targetId, `已转发给 ${this.router.ideLabel(channelId)}，正在流式同步回复…`, msgId);
+    const stream: C2cStreamState = {
+      streamMsgId: null,
+      index: 0,
+      sent: "",
+      msgSeq: null,
+      contentType: "text",
+      failed: false
+    };
+    const reply = await this.router.handle(channelId, text, {
+      onProgress: async (event) => {
+        const snapshot = event.content?.trim();
+        if (snapshot) {
+          await this.pushC2cStream(targetId, msgId, stream, snapshot, false);
+        }
+      }
+    });
+    const finalText = (reply || stream.sent || "").trim();
+    if (!finalText) {
+      await this.sendPrivate(targetId, "提示词已送达，但还没有捕获到完整回复。", msgId);
+      return;
+    }
+    const closed = await this.pushC2cStream(targetId, msgId, stream, finalText, true);
+    if (!closed) {
+      const leftover =
+        stream.sent && finalText.startsWith(stream.sent) ? finalText.slice(stream.sent.length).trim() : finalText;
+      if (leftover && leftover !== stream.sent.trim()) {
+        logger.warn({ chars: leftover.length, streamed: stream.sent.length }, "QQ stream incomplete, sending remainder as normal messages");
+        await this.sendPrivate(targetId, leftover, msgId, false);
+      }
+    }
+  }
+
   private async relayAndReply(
     targetId: string,
     msgId: string,
@@ -433,34 +517,7 @@ export class QQService {
     }
 
     if (kind === "private") {
-      await this.sendPrivate(targetId, `已转发给 ${this.router.ideLabel(channelId)}，正在流式同步回复…`, msgId);
-      const stream: C2cStreamState = {
-        streamMsgId: null,
-        index: 0,
-        sent: "",
-        msgSeq: null,
-        contentType: "markdown",
-        failed: false
-      };
-      const reply = await this.router.handle(channelId, text, {
-        onProgress: async (event) => {
-          const snapshot = event.content?.trim();
-          if (snapshot) {
-            await this.pushC2cStream(targetId, msgId, stream, snapshot, false);
-          }
-        }
-      });
-      if (reply) {
-        const closed = await this.pushC2cStream(targetId, msgId, stream, reply, true);
-        if (!closed) {
-          const leftover = stream.sent && reply.startsWith(stream.sent) ? reply.slice(stream.sent.length) : reply;
-          if (leftover.trim() && leftover.trim() !== stream.sent.trim()) {
-            await this.sendPrivate(targetId, leftover, msgId, true);
-          }
-        }
-      } else if (!stream.sent) {
-        await this.sendPrivate(targetId, "提示词已送达，但还没有捕获到完整回复。", msgId);
-      }
+      await this.enqueuePrivateJob(targetId, msgId, () => this.relayPrivateStream(targetId, msgId, text, channelId));
       return;
     }
 
@@ -843,12 +900,17 @@ export class QQService {
         this.seqByMsgId.set(msgId, nextSeq);
         state.msgSeq = nextSeq;
       }
+      // QQ stream API requires a trailing newline, especially on the final chunk.
+      let contentRaw = next || " ";
+      if (!contentRaw.endsWith("\n")) {
+        contentRaw = `${contentRaw}\n`;
+      }
       const body: Record<string, unknown> = {
         input_mode: "replace",
         input_state: done ? 10 : 1,
         index: state.index,
         content_type: contentType,
-        content_raw: next || " ",
+        content_raw: contentRaw,
         msg_seq: state.msgSeq
       };
       if (msgId) {
@@ -871,7 +933,7 @@ export class QQService {
       const raw = await response.text().catch(() => "");
       if (!response.ok) {
         logger.warn(
-          { status: response.status, errBody: raw, path, index: state.index, contentType },
+          { status: response.status, errBody: raw, path, index: state.index, contentType, done },
           "QQ stream send failed"
         );
         return false;
@@ -900,12 +962,11 @@ export class QQService {
       state.contentType = "text";
       ok = await sendOnce("text");
     }
-    if (!ok && !state.streamMsgId && msgId) {
-      logger.warn("QQ stream unavailable, falling back to normal messages");
-      state.failed = true;
-      return false;
-    }
     if (!ok) {
+      logger.warn(
+        { streamedChars: state.sent.length, index: state.index, done },
+        "QQ stream unavailable, falling back to normal messages"
+      );
       state.failed = true;
       return false;
     }

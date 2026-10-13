@@ -1,5 +1,6 @@
 import { config } from "../config";
 import { logger } from "../logger";
+import { AgentProgressEvent } from "../types";
 import { CommandRouter } from "./CommandRouter";
 import { notificationHub } from "./NotificationHub";
 import { HttpResult } from "./HttpResult";
@@ -19,6 +20,9 @@ interface TokenCache {
 export class WeComService {
   private readonly router = new CommandRouter();
   private readonly deduper = new MessageDeduper();
+  /** Serialize per-user Cursor jobs so overlapping WeCom prompts do not race one Composer. */
+  private readonly userQueue = new Map<string, Promise<void>>();
+  private readonly userQueueDepth = new Map<string, number>();
   private token: TokenCache | null = null;
   private registered = false;
 
@@ -123,6 +127,44 @@ export class WeComService {
     return "";
   }
 
+  private isRelayText(text: string): boolean {
+    const value = text.trim();
+    if (!value.startsWith("/")) {
+      return true;
+    }
+    return /^\/(resume|choose)(\s|$)/i.test(value);
+  }
+
+  private async enqueueUserJob(userId: string, job: () => Promise<void>, onQueued?: (ahead: number) => Promise<void>): Promise<void> {
+    const depth = (this.userQueueDepth.get(userId) ?? 0) + 1;
+    this.userQueueDepth.set(userId, depth);
+    if (depth > 1 && onQueued) {
+      await onQueued(depth - 1);
+    }
+    const previous = this.userQueue.get(userId) ?? Promise.resolve();
+    const run = previous.catch(() => undefined).then(async () => {
+      try {
+        await job();
+      } finally {
+        const left = Math.max(0, (this.userQueueDepth.get(userId) ?? 1) - 1);
+        if (left === 0) {
+          this.userQueueDepth.delete(userId);
+        } else {
+          this.userQueueDepth.set(userId, left);
+        }
+      }
+    });
+    this.userQueue.set(
+      userId,
+      run.finally(() => {
+        if (this.userQueue.get(userId) === run) {
+          this.userQueue.delete(userId);
+        }
+      })
+    );
+    await run;
+  }
+
   private async processMessage(fromUser: string, text: string): Promise<void> {
     if (!fromUser) {
       return;
@@ -139,11 +181,62 @@ export class WeComService {
       return;
     }
     try {
-      const reply = await this.router.handle(`wecom:${fromUser}`, text);
-      await this.sendText(fromUser, reply);
+      if (!this.isRelayText(text)) {
+        const reply = await this.router.handle(`wecom:${fromUser}`, text);
+        await this.sendText(fromUser, reply);
+        return;
+      }
+      await this.enqueueUserJob(
+        fromUser,
+        () => this.relayPrompt(fromUser, text),
+        async (ahead) => {
+          await this.sendText(fromUser, `已收到，前面还有 ${ahead} 个任务在跑，会按顺序单独回复，不会混在一起。`);
+        }
+      );
     } catch (error) {
       logger.warn({ error, fromUser }, "WeCom command failed");
       await this.sendText(fromUser, "请求失败，请查看 Courier 日志。");
+    }
+  }
+
+  private async relayPrompt(fromUser: string, text: string): Promise<void> {
+    const channelId = `wecom:${fromUser}`;
+    await this.sendText(fromUser, `已转发给 ${this.router.ideLabel(channelId)}，正在同步完整回复…`);
+    let lastProgress = "";
+    let lastProgressAt = 0;
+    const reply = await this.router.handle(channelId, text, {
+      onProgress: async (event: AgentProgressEvent) => {
+        const snapshot = event.content?.trim();
+        if (snapshot) {
+          // Classic WeCom has no in-place stream edit; only ping phase changes to avoid flooding.
+          return;
+        }
+        const formatted = event.text?.trim();
+        if (!formatted) {
+          return;
+        }
+        const now = Date.now();
+        if (formatted === lastProgress || now - lastProgressAt < 8000) {
+          return;
+        }
+        lastProgress = formatted;
+        lastProgressAt = now;
+        await this.sendText(fromUser, formatted);
+      }
+    });
+    if (reply && reply !== lastProgress) {
+      await this.sendMarkdownOrText(fromUser, reply);
+    } else if (!reply) {
+      await this.sendText(fromUser, "提示词已送达，但还没有捕获到完整回复。");
+    }
+  }
+
+  private async sendMarkdownOrText(toUser: string, text: string): Promise<void> {
+    try {
+      await this.sendMarkdown(toUser, text);
+    } catch (error) {
+      logger.warn({ error, toUser }, "WeCom markdown send failed, falling back to text");
+      await this.sendText(toUser, text);
     }
   }
 
@@ -191,19 +284,42 @@ export class WeComService {
   }
 
   private async sendText(toUser: string, text: string): Promise<void> {
+    await this.sendChunks(toUser, text, "text");
+  }
+
+  private async sendMarkdown(toUser: string, text: string): Promise<void> {
+    await this.sendChunks(toUser, text, "markdown");
+  }
+
+  private async sendChunks(toUser: string, text: string, kind: "text" | "markdown"): Promise<void> {
     const token = await this.getAccessToken();
-    const chunks = splitMessage(text);
+    const chunks = splitMessage(text, kind === "markdown" ? 2000 : 1800);
     for (const content of chunks) {
-      const response = await fetch(`${config.wecom.apiBase}/cgi-bin/message/send?access_token=${encodeURIComponent(token)}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          touser: toUser,
-          msgtype: "text",
-          agentid: config.wecom.agentId,
-          text: { content }
-        })
-      });
+      if (!content.trim()) {
+        continue;
+      }
+      const body: Record<string, unknown> =
+        kind === "markdown"
+          ? {
+              touser: toUser,
+              msgtype: "markdown",
+              agentid: config.wecom.agentId,
+              markdown: { content }
+            }
+          : {
+              touser: toUser,
+              msgtype: "text",
+              agentid: config.wecom.agentId,
+              text: { content }
+            };
+      const response = await fetch(
+        `${config.wecom.apiBase}/cgi-bin/message/send?access_token=${encodeURIComponent(token)}`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body)
+        }
+      );
       const data = (await response.json()) as { errcode?: number; errmsg?: string };
       if (!response.ok || (data.errcode && data.errcode !== 0)) {
         throw new Error(`WeCom send failed: ${data.errmsg ?? response.status}`);

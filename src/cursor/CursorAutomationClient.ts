@@ -1250,6 +1250,9 @@ export class CursorAutomationClient {
     let lastStatus = "";
     let lastMarkdown = "";
     let stableAt = 0;
+    // Virtualized Composer drops off-screen rows; keep every bubble we have seen in this turn.
+    const bubbleTexts = new Map<string, string>();
+    const bubbleOrder: string[] = [];
 
     while (Date.now() < deadline) {
       if (options.signal?.aborted) {
@@ -1267,7 +1270,24 @@ export class CursorAutomationClient {
         }
       }
 
-      const markdown = snapshot.markdown?.trim() ? snapshot.markdown.trim() : "";
+      for (const part of snapshot.parts) {
+        const text = part.text.trim();
+        if (!text || this.isActivitySnippet(text) || this.isPromptEcho(text, options.prompt ?? "")) {
+          continue;
+        }
+        if (!bubbleTexts.has(part.id)) {
+          bubbleOrder.push(part.id);
+        }
+        if (!bubbleTexts.has(part.id) || text.length >= (bubbleTexts.get(part.id)?.length ?? 0)) {
+          bubbleTexts.set(part.id, text);
+        }
+      }
+
+      const markdown = bubbleOrder
+        .map((id) => bubbleTexts.get(id) ?? "")
+        .filter(Boolean)
+        .join("\n\n")
+        .trim();
       const isNew =
         Boolean(markdown) &&
         markdown !== options.baselineSnippet &&
@@ -1290,7 +1310,10 @@ export class CursorAutomationClient {
             stableAt = Date.now();
           }
           if (!snapshot.generating && Date.now() - stableAt >= 2000) {
-            logger.info({ chars: markdown.length }, "Cursor turn captured after generation settled");
+            logger.info(
+              { chars: markdown.length, bubbles: bubbleOrder.length },
+              "Cursor turn captured after generation settled"
+            );
             return markdown;
           }
         }
@@ -1322,6 +1345,7 @@ export class CursorAutomationClient {
     generating: boolean;
     statusText: string;
     markdown: string;
+    parts: Array<{ id: string; text: string }>;
   }> {
     const expression = `
       (() => {
@@ -1339,6 +1363,7 @@ export class CursorAutomationClient {
           const inner = el.querySelector('[data-react-transcript-row-kind],[data-message-kind],[data-tool-status]');
           return {
             key: String(el.getAttribute('data-find-row-key') || el.getAttribute('data-react-transcript-row-key') || ''),
+            bubbleIds: String(el.getAttribute('data-find-bubble-ids') || ''),
             kind: String((inner && inner.getAttribute('data-react-transcript-row-kind')) || ''),
             messageKind: String((inner && inner.getAttribute('data-message-kind')) || ''),
             toolStatus: String((inner && inner.getAttribute('data-tool-status')) || ''),
@@ -1353,17 +1378,14 @@ export class CursorAutomationClient {
             break;
           }
         }
-        const currentPair = lastHuman >= 0
-          ? items[lastHuman].pairIndex
-          : items.reduce((max, row) => {
-              const n = Number(row.pairIndex);
-              return Number.isFinite(n) && n > max ? n : max;
-            }, -1);
-        const turn = currentPair >= 0
-          ? items.filter((row) => Number(row.pairIndex) === Number(currentPair) || (!row.pairIndex && /^(tail-status|synthetic|turn-actions):/.test(row.key)))
-          : lastHuman >= 0 ? items.slice(lastHuman + 1) : items.slice(-16);
+        // Prefer rows after the latest human prompt so older turn-actions cannot mark this turn complete.
+        const afterHuman = lastHuman >= 0 ? items.slice(lastHuman + 1) : items.slice(-24);
+        const currentPair = lastHuman >= 0 ? items[lastHuman].pairIndex : '';
+        const turn = currentPair
+          ? afterHuman.filter((row) => !row.pairIndex || row.pairIndex === currentPair || /^(tail-status|synthetic):/.test(row.key))
+          : afterHuman;
         const status = [];
-        const markdown = [];
+        const parts = [];
         for (const row of turn) {
           const key = row.key;
           const firstLine = (row.text.split('\\n').find((line) => line.trim()) || '').trim();
@@ -1371,12 +1393,13 @@ export class CursorAutomationClient {
             if (firstLine) status.push(firstLine.slice(0, 240));
             continue;
           }
-          if (row.kind === 'activityGroup' || row.kind === 'activity' || row.messageKind === 'thinking' || row.messageKind === 'tool' || /thinking|activity-group|work-group|tool-placeholder/.test(key)) {
+          if (row.kind === 'activityGroup' || row.kind === 'activity' || row.kind === 'workGroup' || row.messageKind === 'thinking' || row.messageKind === 'tool' || /thinking|activity-group|work-group|tool-placeholder/.test(key)) {
             if (firstLine) status.push(firstLine.slice(0, 240));
             continue;
           }
           if ((row.kind === 'assistantMarkdown' || /assistant-markdown|assistantMarkdown/.test(key) || row.messageKind === 'assistant') && row.text) {
-            markdown.push(row.text);
+            const id = row.bubbleIds || key || ('md-' + parts.length);
+            parts.push({ id, text: row.text });
           }
         }
         const stop = Array.from(document.querySelectorAll('button,[role="button"]')).some((el) => {
@@ -1384,24 +1407,29 @@ export class CursorAutomationClient {
           const rect = el.getBoundingClientRect();
           return rect.width > 4 && rect.height > 4 && /stop generating|停止生成/i.test(label);
         });
-        const liveTail = items.some((row) => row.kind === 'tailStatus' || /^tail-status:/.test(row.key));
-        const toolLoading = items.some((row) => row.toolStatus === 'loading');
+        const liveTail = turn.some((row) => row.kind === 'tailStatus' || /^tail-status:/.test(row.key));
+        const toolLoading = turn.some((row) => row.toolStatus === 'loading');
         const completed = turn.some((row) => /^turn-actions:/.test(row.key) || row.kind === 'turnActions');
+        const markdown = parts.map((part) => part.text).join('\\n\\n');
         return {
           generating: stop || liveTail || toolLoading || !completed,
           statusText: status.length ? status[status.length - 1] : '',
-          markdown: markdown.join('\\n\\n').slice(0, 24000)
+          markdown: markdown.slice(0, 24000),
+          parts: parts.map((part) => ({ id: part.id, text: part.text.slice(0, 12000) })).slice(0, 40)
         };
       })();
     `;
-    const result = await this.cdp.evaluateJson<{ generating: boolean; statusText: string; markdown: string }>(
-      client,
-      expression
-    );
+    const result = await this.cdp.evaluateJson<{
+      generating: boolean;
+      statusText: string;
+      markdown: string;
+      parts: Array<{ id: string; text: string }>;
+    }>(client, expression);
     return {
       generating: result?.generating === true,
       statusText: result?.statusText ?? "",
-      markdown: result?.markdown ?? ""
+      markdown: result?.markdown ?? "",
+      parts: Array.isArray(result?.parts) ? result.parts : []
     };
   }
 
