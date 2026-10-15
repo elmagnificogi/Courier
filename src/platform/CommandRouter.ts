@@ -114,6 +114,9 @@ export class CommandRouter {
     if (value === "/restart") {
       return TextSecurityGuard.sanitizeOutbound(await this.bridge.restart());
     }
+    if (value === "/launch" || value.startsWith("/launch ")) {
+      return await this.bridge.launchIdeCommand(this.ideFor(channelId), value);
+    }
     if (value === "/diag") {
       // Allow raw diagnostics output (no redaction) for troubleshooting
       return await this.bridge.diagnostics(this.ideFor(channelId));
@@ -349,6 +352,7 @@ export class CommandRouter {
       "/history [条数|clear]  历史记录",
       "/chats 或 /targets  列出各 IDE 已打开的窗口",
       "/target <序号>|auto  把当前对话发到这个窗口，或改回自动",
+      "/launch [cursor|codex]  启动 Cursor 或 Codex，并打开远程调试",
       "/diag  诊断",
       "/whoami  查看 QQ openid，或企业微信智能机器人 userid",
       "/queue  查看待发送的图片或文件",

@@ -11,6 +11,7 @@ import { CodexAutomationClient } from "../codex/CodexAutomationClient";
 import { CursorApiBackend } from "../backends/CursorApiBackend";
 import { logger } from "../logger";
 import { VscodeAutomationClient } from "../vscode/VscodeAutomationClient";
+import { launchIde, resolveLaunchIde } from "../platform/IdeLauncher";
 
 type IdeClient = CursorAutomationClient | WindsurfAutomationClient | VscodeAutomationClient | CodexAutomationClient;
 
@@ -94,6 +95,15 @@ export class BridgeService {
     }, 500);
 
     return "Restarting bridge...";
+  }
+
+  async launchIdeCommand(current: IdeTarget, raw: string): Promise<string> {
+    const arg = raw.replace(/^\/launch\b/i, "").trim();
+    const resolved = resolveLaunchIde(arg, current);
+    if ("error" in resolved) {
+      return resolved.error;
+    }
+    return launchIde(resolved.ide);
   }
 
   async switchMode(mode: BridgeMode, ide?: IdeTarget): Promise<string> {
