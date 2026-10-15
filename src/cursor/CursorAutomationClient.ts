@@ -269,7 +269,7 @@ export class CursorAutomationClient {
       });
 
       if (relayResult.cancelled) {
-        return { text: "已取消等待 Cursor 回复。", metadata: { status: "cancelled" } };
+        return { text: "已停止等待 Cursor 回复（任务已取消或在 Cursor 里手动停止）。", metadata: { status: "cancelled" } };
       }
 
       if (!relayResult.delivered) {
@@ -1250,6 +1250,8 @@ export class CursorAutomationClient {
     let lastStatus = "";
     let lastMarkdown = "";
     let stableAt = 0;
+    let sawStopButton = false;
+    let stopReleasedAt = 0;
     // Virtualized Composer drops off-screen rows; keep every bubble we have seen in this turn.
     const bubbleTexts = new Map<string, string>();
     const bubbleOrder: string[] = [];
@@ -1259,6 +1261,16 @@ export class CursorAutomationClient {
         return "__cancelled__";
       }
       const snapshot = await this.readTurnSnapshot(client);
+      if (snapshot.stopVisible) {
+        sawStopButton = true;
+        stopReleasedAt = 0;
+      } else if (sawStopButton && !snapshot.toolLoading) {
+        if (stopReleasedAt === 0) {
+          stopReleasedAt = Date.now();
+        }
+      } else {
+        stopReleasedAt = 0;
+      }
       const statusKind = this.progressKind(snapshot.statusText);
       if (statusKind && statusKind !== lastStatus) {
         lastStatus = statusKind;
@@ -1293,6 +1305,19 @@ export class CursorAutomationClient {
         markdown !== options.baselineSnippet &&
         !this.isPromptEcho(markdown, options.prompt ?? "") &&
         !this.isActivitySnippet(markdown);
+
+      // Manual Stop in Cursor: Stop button was visible, then gone — end wait so QQ queue unlocks.
+      if (sawStopButton && stopReleasedAt > 0 && Date.now() - stopReleasedAt >= 800) {
+        if (isNew) {
+          logger.info(
+            { chars: markdown.length, bubbles: bubbleOrder.length },
+            "Cursor turn captured after Stop control released"
+          );
+          return markdown;
+        }
+        logger.info("Cursor generation stopped with no further assistant text");
+        return "__cancelled__";
+      }
 
       if (isNew) {
         if (markdown !== lastMarkdown) {
@@ -1353,6 +1378,8 @@ export class CursorAutomationClient {
 
   private async readTurnSnapshot(client: ClientDomains): Promise<{
     generating: boolean;
+    stopVisible: boolean;
+    toolLoading: boolean;
     statusText: string;
     markdown: string;
     parts: Array<{ id: string; text: string }>;
@@ -1419,10 +1446,13 @@ export class CursorAutomationClient {
         });
         const liveTail = turn.some((row) => row.kind === 'tailStatus' || /^tail-status:/.test(row.key));
         const toolLoading = turn.some((row) => row.toolStatus === 'loading');
-        const completed = turn.some((row) => /^turn-actions:/.test(row.key) || row.kind === 'turnActions');
+        // Do not treat missing turn-actions as "still generating": after a manual Stop,
+        // turn-actions often never appear and would pin the QQ relay queue forever.
         const markdown = parts.map((part) => part.text).join('\\n\\n');
         return {
-          generating: stop || liveTail || toolLoading || !completed,
+          generating: stop || liveTail || toolLoading,
+          stopVisible: stop,
+          toolLoading,
           statusText: status.length ? status[status.length - 1] : '',
           markdown: markdown.slice(0, 24000),
           parts: parts.map((part) => ({ id: part.id, text: part.text.slice(0, 12000) })).slice(0, 40)
@@ -1431,12 +1461,16 @@ export class CursorAutomationClient {
     `;
     const result = await this.cdp.evaluateJson<{
       generating: boolean;
+      stopVisible: boolean;
+      toolLoading: boolean;
       statusText: string;
       markdown: string;
       parts: Array<{ id: string; text: string }>;
     }>(client, expression);
     return {
       generating: result?.generating === true,
+      stopVisible: result?.stopVisible === true,
+      toolLoading: result?.toolLoading === true,
       statusText: result?.statusText ?? "",
       markdown: result?.markdown ?? "",
       parts: Array.isArray(result?.parts) ? result.parts : []

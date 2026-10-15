@@ -83,7 +83,7 @@ Cursor 的回复**不是**走官方 Agent SDK，也不是读内部 SQLite。默�
 > - QQ 私聊会把这段正文刷进**同一条官方流式消息**（Markdown 子集）；群聊没有流式接口，终稿单独发 Markdown。
 > - Cursor 与 Windsurf 的 `/start` 快捷操作：新对话 | 上一条 · Ask 模式 | Code 模式 · Plan 模式 | Context % · 重启 · 帮助。
 > - VS Code 的 `/model`、`/models` 会从当前可见的模型控件做 best-effort 探测/列表；结果取决于本机聊天 UI 状态。
-> - `/restart` 会按平台启动脚本重启桥接；起来后会通知「Bridge restarted and is now online.」
+> - `/restart` 会重启 Courier 进程本身（Windows 走 `start-courier.ps1`），不关闭 IDE；起来后会通知「Courier 已重启并上线。」
 > - Context 输出尽量精简：`Context status` / `• Context 20%`（不含路径和备注）。
 > - 支持标注遵循约定：`official`、`best-effort`、`unsupported-contract`。
 
@@ -353,7 +353,7 @@ QQ Markdown 是子集（标题、加粗、列表、代码块、链接），对�
 | `/resume [text]`   | 继续上一件事                           | `/resume fix the tests` |
 | `/choose <option>` | 回答助手提问                           | `/choose A`             |
 | `/diag`            | 完整 CDP + 选择器诊断                   | `/diag`                 |
-| `/restart`         | 重启桥接（走对应平台启动脚本）                  | `/restart`              |
+| `/restart`         | 重启 Courier 服务（不关 IDE）                   | `/restart`              |
 
 
 

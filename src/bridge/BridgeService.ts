@@ -2,6 +2,7 @@ import { CursorAutomationClient } from "../cursor/CursorAutomationClient";
 import { CursorContextExtractor } from "../cursor/CursorContextExtractor";
 import { CursorSqliteDiagnostics } from "../cursor/CursorSqliteDiagnostics";
 import { spawn } from "child_process";
+import fs from "fs";
 import path from "path";
 import { WindsurfAutomationClient } from "../windsurf/WindsurfAutomationClient";
 import { ImageInjectionService } from "../media/ImageInjectionService";
@@ -60,40 +61,73 @@ export class BridgeService {
   }
 
   async restart(): Promise<string> {
-    // Relaunch using platform-specific .bat launchers (Windows-only).
+    // Relaunch Courier itself (not the IDE). A detached watchdog waits for this
+    // process to release the port, then runs start-courier.ps1 / npm run start.
     const cwd = path.resolve(__dirname, "..", "..");
     const env = { ...process.env };
-    if (!env.DOTENV_CONFIG_PATH) delete env.DOTENV_CONFIG_PATH;
-
-    const script =
-      config.bridgeIdeTarget === "windsurf"
-        ? "run-windsurf.bat"
-        : config.bridgeIdeTarget === "vscode"
-          ? "run-vscode.bat"
-          : config.bridgeIdeTarget === "codex"
-            ? "run-codex.bat"
-            : "run-cursor.bat";
-    const scriptPath = path.resolve(cwd, script);
+    const port = String(config.port || 8787);
+    const tmpDir = path.join(cwd, "tmp");
+    const restartFlag = path.join(tmpDir, "courier-restart.flag");
 
     try {
-      const child = spawn("cmd.exe", ["/c", scriptPath], {
-        cwd,
-        env,
-        detached: true,
-        stdio: "ignore",
-        windowsHide: true
-      });
-      child.unref();
+      fs.mkdirSync(tmpDir, { recursive: true });
+      fs.writeFileSync(restartFlag, `${Date.now()}\n`, "utf8");
     } catch (error) {
-      logger.error({ error }, "Failed to spawn restart process via launcher", { scriptPath });
-      return "Restart failed to launch.";
+      logger.warn({ error }, "Failed to write courier restart flag");
     }
 
+    try {
+      if (process.platform === "win32") {
+        const startScript = path.resolve(cwd, "scripts", "windows", "start-courier.ps1");
+        const escaped = startScript.replace(/'/g, "''");
+        const command = [
+          `$ErrorActionPreference='Continue'`,
+          `$deadline=(Get-Date).AddSeconds(45)`,
+          `do {`,
+          `  $listening=Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue`,
+          `  if (-not $listening) { break }`,
+          `  Start-Sleep -Seconds 1`,
+          `} while ((Get-Date) -lt $deadline)`,
+          `Start-Sleep -Seconds 1`,
+          `& '${escaped}'`
+        ].join("; ");
+        const child = spawn(
+          "powershell.exe",
+          ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+          {
+            cwd,
+            env,
+            detached: true,
+            stdio: "ignore",
+            windowsHide: true
+          }
+        );
+        child.unref();
+      } else {
+        const entry = path.resolve(cwd, "src", "index.ts");
+        const child = spawn(
+          "sh",
+          ["-c", `sleep 2; exec "${process.execPath}" --import tsx "${entry}"`],
+          {
+            cwd,
+            env,
+            detached: true,
+            stdio: "ignore"
+          }
+        );
+        child.unref();
+      }
+    } catch (error) {
+      logger.error({ error }, "Failed to spawn Courier restart watchdog");
+      return "重启失败：无法拉起守护进程。";
+    }
+
+    // Give IM adapters time to flush the acknowledgement before we die.
     setTimeout(() => {
       process.exit(0);
-    }, 500);
+    }, 1200);
 
-    return "Restarting bridge...";
+    return "Courier 正在重启，约几秒后恢复；无需关 IDE。";
   }
 
   async switchMode(mode: BridgeMode, ide?: IdeTarget): Promise<string> {

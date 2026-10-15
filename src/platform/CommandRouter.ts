@@ -17,6 +17,7 @@ export class CommandRouter {
   private readonly stateStore = new ChatStateStore();
   private readonly lastPromptByChannel = new Map<string, { prompt: string; at: number }>();
   private readonly activeRequestByChannel = new Map<string, number>();
+  private readonly abortByChannel = new Map<string, AbortController>();
   private readonly progressByChannel = new Map<string, ProgressState>();
   private readonly pendingAttachmentByChannel = new Map<
     string,
@@ -215,8 +216,18 @@ export class CommandRouter {
     this.stateStore.recordPrompt(this.channelKeyToNumber(channelId), prompt, startedAt);
     this.activeRequestByChannel.set(channelId, requestId);
     this.progressByChannel.set(channelId, { requestId, phase: "running", startedAt, updatedAt: startedAt });
+    const controller = new AbortController();
+    this.abortByChannel.get(channelId)?.abort();
+    this.abortByChannel.set(channelId, controller);
+    if (options?.signal) {
+      if (options.signal.aborted) {
+        controller.abort();
+      } else {
+        options.signal.addEventListener("abort", () => controller.abort(), { once: true });
+      }
+    }
     try {
-      const relayOptions: SendPromptOptions = {};
+      const relayOptions: SendPromptOptions = { signal: controller.signal };
       if (options?.onProgress) {
         relayOptions.onProgress = async (event) => {
           this.progressByChannel.set(channelId, {
@@ -228,22 +239,21 @@ export class CommandRouter {
           await options.onProgress?.(event);
         };
       }
-      if (options?.signal) {
-        relayOptions.signal = options.signal;
-      }
       const pending = this.takePendingAttachment(channelId);
       const ide = this.ideFor(channelId);
       const response = pending
         ? await this.bridge.relayPromptForPendingAttachment(prompt, pending.kind, pending.fileName, relayOptions, ide)
         : await this.bridge.relayPrompt(prompt, relayOptions, ide);
       this.stateStore.recordDelivered(this.channelKeyToNumber(channelId), response, requestId, Date.now());
-      this.progressByChannel.delete(channelId);
-      this.activeRequestByChannel.delete(channelId);
       return TextSecurityGuard.sanitizeOutbound(response);
     } catch (error) {
+      throw error;
+    } finally {
       this.progressByChannel.delete(channelId);
       this.activeRequestByChannel.delete(channelId);
-      throw error;
+      if (this.abortByChannel.get(channelId) === controller) {
+        this.abortByChannel.delete(channelId);
+      }
     }
   }
 
@@ -258,16 +268,24 @@ export class CommandRouter {
 
   private cancel(channelId: string): string {
     const requestId = this.activeRequestByChannel.get(channelId);
-    if (!requestId) {
+    const controller = this.abortByChannel.get(channelId);
+    if (!requestId && !controller) {
       return "没有可取消的请求。";
     }
+    controller?.abort();
     this.activeRequestByChannel.delete(channelId);
     this.progressByChannel.delete(channelId);
-    return `已取消进行中的请求 #${requestId}。`;
+    return requestId
+      ? `已取消进行中的请求 #${requestId}，队列会继续处理下一条。`
+      : "已发出取消信号。";
   }
 
   private cancelAll(): string {
     const count = this.activeRequestByChannel.size;
+    for (const controller of this.abortByChannel.values()) {
+      controller.abort();
+    }
+    this.abortByChannel.clear();
     this.activeRequestByChannel.clear();
     this.progressByChannel.clear();
     return count > 0 ? `已取消 ${count} 个进行中的请求。` : "没有可取消的请求。";
@@ -343,7 +361,8 @@ export class CommandRouter {
       "/usage  用量状态",
       "/progress  当前请求进度",
       "/resume [补充说明]  继续上次任务",
-      "/cancel [all]  取消请求",
+      "/cancel [all]  取消当前等待并放行队列",
+      "/restart  重启 Courier 服务（不关 IDE）",
       "/last  上一条助手回复",
       "/choose A|B|C|D [自定义]  回答助手提问",
       "/history [条数|clear]  历史记录",
