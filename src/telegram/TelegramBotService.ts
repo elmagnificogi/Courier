@@ -226,6 +226,10 @@ export class TelegramBotService {
       await this.sendText(msg.chat.id, await this.bridge.restart());
       return;
     }
+    if (text === "/launch" || text.startsWith("/launch ")) {
+      await this.sendText(msg.chat.id, await this.bridge.launchIdeCommand(this.ideFor(msg.chat.id), text));
+      return;
+    }
 
     if (text.startsWith("/cancel")) {
       const arg = text.replace("/cancel", "").trim().toLowerCase();
@@ -396,6 +400,7 @@ export class TelegramBotService {
       "- `/last` show the last AI reply",
       "- `/targets` list open windows across Cursor, Codex, Windsurf, and VS Code",
       "- `/resume` continue from where we left off",
+      "- `/launch [cursor|codex]` start Cursor or Codex with remote debugging",
       "",
       "## Common Commands",
       "- `/context`, `/usage`, `/targets`",
@@ -439,6 +444,7 @@ export class TelegramBotService {
       "- `/target <index>|auto` send this chat to that window, or return to automatic selection",
       "- `/chats` alias for target list/status",
       "- `/diag` show bridge diagnostics",
+      "- `/launch [cursor|codex]` start Cursor or Codex with remote debugging",
       "",
       "## Attachments",
       "- `/photomode auto|manual|status` set photo send behavior",

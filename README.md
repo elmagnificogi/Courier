@@ -354,6 +354,7 @@ QQ Markdown 是子集（标题、加粗、列表、代码块、链接），对�
 | `/choose <option>` | 回答助手提问                           | `/choose A`             |
 | `/diag`            | 完整 CDP + 选择器诊断                   | `/diag`                 |
 | `/restart`         | 重启 Courier 服务（不关 IDE）                   | `/restart`              |
+| `/launch [ide]`    | 启动 Cursor 或 Codex，并打开远程调试端口。不带参数时启动当前目标 | `/launch codex`         |
 
 
 

@@ -1,3 +1,7 @@
+param(
+  [switch]$Quiet
+)
+
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Windows.Forms | Out-Null
 
@@ -28,6 +32,10 @@ namespace CourierCodexLaunch {
 "@
 
 function Show-Note([string]$message) {
+  if ($Quiet) {
+    Write-Output $message
+    return
+  }
   [System.Windows.Forms.MessageBox]::Show(
     $message,
     "Codex debug",
